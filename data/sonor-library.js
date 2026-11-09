@@ -127,7 +127,7 @@
 // getAllProductAccessories / getProductAccessories (§20 parent-linked
 // accessory options). First consumer: Takeoffs v5.174.0 device dropdowns +
 // Device Schedule.
-window.SONOR_LIBRARY_VERSION = '3.9.0';
+window.SONOR_LIBRARY_VERSION = '3.10.0';
 window.SonorLibrary = window.SonorLibrary || {};
 
 (function (SL) {
@@ -2020,6 +2020,76 @@ window.SonorLibrary = window.SonorLibrary || {};
     return true;
   };
 
+  // v3.10.0 (2026-11-09) — SPEAKER CLASSIFICATION + PLACEMENT CHECK.
+  // SSOT: library_settings.speaker_classification = { types:[{key,label,mount}],
+  // uses:[{key,label}], external, location_rules:{outdoor_floor_codes,
+  // outdoor_room_words, wet_room_words} }. Every speaker / sub / soundbar has
+  //   metadata.speaker_role = TYPE (in_ceiling, in_wall, floorstanding …)
+  //   metadata.domain       = USE  (cinema · smart_home = multiroom · both)
+  //   metadata.external     = outdoor rated (adds 'outdoor' to mount_type[])
+  // SQL twin: speaker_placement_issues(project) / v_speaker_placement_issues —
+  // keep the two rule sets identical.
+  SL.getSpeakerClassification = function (force) {
+    if (state._spkClass && !force) return Promise.resolve(state._spkClass);
+    if (!state.client) return Promise.resolve(null);
+    return state.client.from('library_settings').select('value').eq('key', 'speaker_classification').maybeSingle()
+      .then(({ data }) => { state._spkClass = (data && data.value) || null; return state._spkClass; })
+      .catch(() => null);
+  };
+  SL.speakerTypeLabel = function (key) {
+    const t = ((state._spkClass && state._spkClass.types) || []).find(x => x.key === key);
+    return t ? t.label : (key ? String(key).replace(/_/g, ' ') : '');
+  };
+  SL.speakerUseLabel = function (key) {
+    const u = ((state._spkClass && state._spkClass.uses) || []).find(x => x.key === key);
+    return u ? u.label : (key || '');
+  };
+  // ctx = { floorCode, roomName, outdoor?:bool, wet?:bool } — outdoor / wet are
+  // worked out from the shared location_rules when not given. Returns
+  // [{ severity:'error'|'warning', issue, message }] — empty = fine.
+  SL.locationFlags = function (ctx) {
+    ctx = ctx || {};
+    const r = (state._spkClass && state._spkClass.location_rules) || {};
+    const room = String(ctx.roomName || '').toLowerCase();
+    const fc = String(ctx.floorCode || '').toUpperCase();
+    const outdoor = ctx.outdoor != null ? !!ctx.outdoor
+      : ((r.outdoor_floor_codes || []).indexOf(fc) !== -1 || (r.outdoor_room_words || []).some(w => room.indexOf(w) !== -1));
+    const wet = ctx.wet != null ? !!ctx.wet
+      : (r.wet_room_words || []).some(w => new RegExp('(^|[^a-z])' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).test(room));
+    return { outdoor, wet };
+  };
+  SL.checkPlacement = function (dev, blockRow, ctx) {
+    const out = [];
+    if (!blockRow) return out;
+    const md = blockRow.block_metadata || blockRow.metadata || {};
+    const cats = Array.isArray(md.device_categories) ? md.device_categories : [];
+    const audio = cats.some(c => c === 'speaker' || c === 'subwoofer' || c === 'soundbar');
+    if (!dev) { if (audio) out.push({ severity: 'error', issue: 'no_device', message: 'No device chosen and the block has no default' }); return out; }
+    const dm = dev.metadata || {};
+    const name = ((dev.make || '') + ' ' + (dev.model || dev.model_id || '')).trim();
+    if (cats.length && cats.indexOf(dev.category) === -1)
+      out.push({ severity: 'error', issue: 'wrong_category', message: name + ' is a ' + dev.category + ' — this block takes ' + cats.join(' / ') });
+    const roles = Array.isArray(md.device_roles) ? md.device_roles : [];
+    let caps = [];
+    if (dm.speaker_role) caps.push(String(dm.speaker_role));
+    if (Array.isArray(dm.mount_type)) caps = caps.concat(dm.mount_type.map(String));
+    if (roles.length && caps.length && !caps.some(c => roles.indexOf(c) !== -1))
+      out.push({ severity: 'error', issue: 'wrong_type', message: name + ' is ' + SL.speakerTypeLabel(dm.speaker_role) + ' — this block takes ' + roles.map(SL.speakerTypeLabel).join(' / ') });
+    if (audio) {
+      const loc = SL.locationFlags(ctx);
+      const ext = dm.external === true || dm.external === 'true';
+      if (loc.outdoor && !ext)
+        out.push({ severity: 'error', issue: 'not_external', message: name + ' is not outdoor rated but sits outside' + (ctx && ctx.roomName ? ' (' + ctx.roomName + ')' : '') });
+      else if (loc.wet && !ext)
+        out.push({ severity: 'warning', issue: 'wet_room', message: name + ' is not moisture / outdoor rated — ' + ((ctx && ctx.roomName) || 'this room') + ' is a wet area' });
+      const nn = String(blockRow.service_nn || md.service_nn || '');
+      const want = nn === '01' ? 'cinema' : (nn === '02' ? 'smart_home' : null);
+      if (want && (dm.domain === 'cinema' || dm.domain === 'smart_home') && dm.domain !== want)
+        out.push({ severity: 'warning', issue: 'wrong_use', message: name + ' is tagged ' + SL.speakerUseLabel(dm.domain) + ' — this is a ' + SL.speakerUseLabel(want) + ' block' });
+    }
+    return out;
+  };
+
   // §22 render source: curated device_options[] (alias-resolved), FALLBACK to
   // the full candidate sweep when empty. Default (device_model_id) is always
   // an implicit member. Returns { options:[row], default, source }.
@@ -2045,6 +2115,8 @@ window.SonorLibrary = window.SonorLibrary || {};
       seen[id] = true;
       options.push(byId[id] || { model_id: id, make: '', model: id, _missing: true });
     });
+    await SL.getSpeakerClassification();
+    options.forEach(o => { if (!o._missing) { const iss = SL.checkPlacement(o, blockRow, (opts && opts.ctx) || { outdoor: false, wet: false }); if (iss.length) o._issues = iss; } });
     options.sort((a, b) => String(a.make || '').localeCompare(String(b.make || ''))
       || String(a.model || '').localeCompare(String(b.model || '')));
     return { options, default: def, source };

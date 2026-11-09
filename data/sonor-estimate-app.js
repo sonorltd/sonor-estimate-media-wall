@@ -46,7 +46,7 @@
     ]);
     if (r[0].error) toast(r[0].error.message, 'error');
     S.projects = r[0].data || [];
-    if (r[1] && r[1].data && r[1].data.template && (r[1].data.template.sections || []).length) S.tpl = r[1].data.template;   // the table wins; the synced JSON is the offline tier
+    if (r[1] && r[1].data && r[1].data.template && ((r[1].data.template.sections || []).length || r[1].data.template.takeoff)) S.tpl = r[1].data.template;   // the table wins; the synced JSON is the offline tier
     var want = new URLSearchParams(location.search).get('project') || (location.hash.match(/project=([0-9a-f-]{36})/) || [])[1];
     var PB = global.SonorProjectBar;
     if (PB && PB.init) {
@@ -83,13 +83,31 @@
 
   // inputs from the design apps' rows (§66 links) — never typed twice
   async function inputsFromProject() {
-    var p = S.project, L = (p && p.metadata && p.metadata.links) || {}, inp = {}, c = client();
+    await refreshProject();
+    var p = S.project, md = (p && p.metadata) || {}, L = md.links || {}, inp = E.inputsFromSummaries ? E.inputsFromSummaries(md) : {}, c = client();   // 1.1.0: the design apps' summaries + Takeoffs first, then the linked rows
+    var cdId = L.cinema_design_id || ((md.cinema_rooms || [])[0] || {}).design_id || null;
     try {
-      if (L.cinema_design_id) { var cd = await c.from('cinema_designs').select('room_width, room_depth, room_height, metadata').eq('id', L.cinema_design_id).maybeSingle(); if (cd.data) { if (cd.data.room_width) inp.w_mm = Number(cd.data.room_width); if (cd.data.room_depth) inp.d_mm = Number(cd.data.room_depth); if (cd.data.room_height) inp.h_mm = Number(cd.data.room_height); } }
+      if (cdId) { var cd = await c.from('cinema_designs').select('room_width, room_depth, room_height, metadata').eq('id', cdId).maybeSingle(); if (cd.data) { if (cd.data.room_width) inp.w_mm = Number(cd.data.room_width); if (cd.data.room_depth) inp.d_mm = Number(cd.data.room_depth); if (cd.data.room_height) inp.h_mm = Number(cd.data.room_height); } }
       if (A.kind === 'media-wall') { var mw = await c.from('media_wall_configs').select('config').eq('project_id', p.id).eq('archived', false).order('updated_at', { ascending: false }).limit(1); var rm = mw.data && mw.data[0] && mw.data[0].config && mw.data[0].config.design && mw.data[0].config.design.room; if (rm) { if (rm.wall_mm) inp.w_mm = rm.wall_mm; if (rm.ceiling_mm) inp.h_mm = rm.ceiling_mm; } }
       if (!inp.h_mm && p.metadata && p.metadata.ceiling_height_mm) inp.h_mm = Number(p.metadata.ceiling_height_mm);
     } catch (e) { console.warn('[estimate] inputs from links', e); }
     return inp;
+  }
+
+  // the project record again (Takeoffs / the design apps may have published since the list loaded)
+  async function refreshProject() {
+    if (!S.project || !client()) return;
+    try { var r = await client().from('projects').select('id, ref, name, client_name, address, postcode, status, metadata, updated_at').eq('id', S.project.id).maybeSingle(); if (r.data) { S.project = r.data; S.projects = S.projects.map(function (x) { return x.id === r.data.id ? r.data : x; }); } } catch (e) { console.warn('[estimate] project refresh', e); }
+  }
+  // sections for a new / reseeded estimate: Takeoffs (whole house) or the template + inputs (one room)
+  async function seedSections(t, inputs) {
+    if (t.source !== 'takeoff') return E.fromTemplate(t, inputs, lib);
+    var md = (S.project && S.project.metadata) || {}, ts = md.takeoff_summary;
+    if (!ts || !(ts.places || []).length) { toast('No Takeoffs plan on this project yet — draw the points in Takeoffs, then re-read', 'warn'); return []; }
+    var linked = [];
+    try { var r = await client().from('estimates').select('id, kind, rev, status, label, sections, metadata').eq('project_id', S.project.id).neq('kind', A.kind); linked = E.pickLinked(r.data || []); } catch (e) { console.warn('[estimate] linked estimates', e); }
+    S.linked = linked;
+    return E.fromTakeoff(t, ts, { linked: linked });
   }
 
   // ── actions ─────────────────────────────────────────────────────────────────────────────────────
@@ -98,12 +116,15 @@
     var t = tpl(), inputs = Object.assign(E.defaultsOf(t), await inputsFromProject());
     await loadLibrary();
     var rev = S.list.reduce(function (m, e) { return Math.max(m, e.rev || 0); }, 0) + 1;
-    S.cur = { id: null, project_id: S.project.id, kind: A.kind, rev: rev, status: 'draft', label: t.title, inputs: inputs, sections: E.fromTemplate(t, inputs, lib), basis: (t.basis || []).slice(), flags: t.flags === null ? [] : (t.flags || []).slice(), totals: {}, source: { template: A.kind + '@' + (t.version || '1.0.0'), app: A.appKey, app_version: A.version || null }, metadata: { contingency: (t.defaults || {}).contingency || 0 } };
+    var secs = await seedSections(t, inputs);
+    S.cur = { id: null, project_id: S.project.id, kind: A.kind, rev: rev, status: 'draft', label: t.title, inputs: inputs, sections: secs, basis: (t.basis || []).slice(), flags: t.flags === null ? [] : (t.flags || []).slice(), totals: {}, source: { template: A.kind + '@' + (t.version || '1.0.0'), app: A.appKey, app_version: A.version || null }, metadata: { contingency: (t.defaults || {}).contingency || 0 } };
     S.dirty = true; render();
   }
-  function reseed() {
-    if (!editable()) return; if (!confirm('Rebuild the sections from the template and the inputs? Typed changes to rows are replaced.')) return;
-    S.cur.sections = E.fromTemplate(tpl(), S.cur.inputs, lib); S.dirty = true; render();
+  async function reseed() {
+    var t = tpl(), tk = t.source === 'takeoff';
+    if (!editable()) return; if (!confirm(tk ? 'Re-read the sections from Takeoffs and the project\'s other estimates? Typed changes to rows are replaced.' : 'Rebuild the sections from the template and the inputs? Typed changes to rows are replaced.')) return;
+    if (tk) { Object.assign(S.cur.inputs, await inputsFromProject()); }
+    S.cur.sections = await seedSections(t, S.cur.inputs); S.dirty = true; render();
   }
   function estModel() { var c = S.cur || {}; return { id: c.id, kind: A.kind, rev: c.rev, label: c.label, sections: c.sections || [], basis: c.basis || [], flags: c.flags, contingency: num((c.metadata || {}).contingency, 0), intro: (c.metadata || {}).intro || null }; }
   async function save(silent) {
@@ -154,12 +175,12 @@
     var t = tpl(), c = S.cur;
     renderActions();
     if (!S.project) { host.innerHTML = '<div class="est-empty card">Pick a project in the bar above to start a ' + esc((t.title || 'estimate').toLowerCase()) + '.</div>'; return; }
-    if (!c) { host.innerHTML = '<div class="est-empty card"><h3>' + esc(S.project.name || S.project.ref) + '</h3><p class="muted">No ' + esc((t.title || 'estimate').toLowerCase()) + ' on this project yet. A new one starts from the ' + esc(t.title || '') + ' template, with the room sizes taken from the project\'s design rows where they exist.</p><button class="btn btn-primary" onclick="EstimateApp.newEstimate()">Start ' + esc((t.title || 'estimate').toLowerCase()) + '</button></div>'; return; }
+    if (!c) { host.innerHTML = '<div class="est-empty card"><h3>' + esc(S.project.name || S.project.ref) + '</h3><p class="muted">No ' + esc((t.title || 'estimate').toLowerCase()) + ' on this project yet. ' + (t.source === 'takeoff' ? 'A new one reads every point on the Takeoffs plan by service, and takes the cinema / media wall figures from their own estimates.' : 'A new one starts from the ' + esc(t.title || '') + ' template, with the room sizes taken from the project\'s design apps and Takeoffs.') + '</p><button class="btn btn-primary" onclick="EstimateApp.newEstimate()">Start ' + esc((t.title || 'estimate').toLowerCase()) + '</button></div>'; return; }
     var ro = !editable(), h = '';
     h += '<div class="est-grid"><div class="est-left">';
     // inputs
-    h += '<div class="card est-inputs"><div class="est-ptt">Inputs <span class="muted">· ' + esc(t.title || '') + ' template' + (S.tpl ? '' : ' (offline copy)') + '</span>' + (ro ? '' : '<button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="EstimateApp.reseed()" title="Rebuild the sections from the template and these inputs">↻ Reseed sections</button>') + '</div><div class="est-in-grid">';
-    (t.inputs || []).forEach(function (i) { var v = c.inputs[i.key]; h += '<label class="est-in"><span class="field-label">' + esc(i.label) + (i.unit ? ' <em>' + esc(i.unit) + '</em>' : '') + '</span><input class="input mono" type="number" ' + (i.step ? 'step="' + i.step + '" ' : '') + (i.min != null ? 'min="' + i.min + '" ' : '') + (i.max != null ? 'max="' + i.max + '" ' : '') + 'value="' + esc(v == null ? '' : v) + '"' + (ro ? ' disabled' : '') + ' onchange="EstimateApp.setInput(\'' + i.key + '\',this.value)"></label>'; });
+    h += '<div class="card est-inputs"><div class="est-ptt">Inputs <span class="muted">· ' + esc(t.title || '') + ' template' + (S.tpl ? '' : ' (offline copy)') + '</span>' + (ro ? '' : (t.source === 'takeoff' ? '<button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="EstimateApp.reseed()" title="Read the points from Takeoffs and the project\'s room estimates again">↻ Re-read from Takeoffs</button>' : '<button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="EstimateApp.reseed()" title="Rebuild the sections from the template and these inputs">↻ Reseed sections</button>')) + '</div><div class="est-in-grid">';
+    (t.inputs || []).forEach(function (i) { var v = c.inputs[i.key]; h += '<label class="est-in"><span class="field-label">' + esc(i.label) + (i.unit ? ' <em>' + esc(i.unit) + '</em>' : '') + '</span><input class="input mono" type="number" ' + (i.step ? 'step="' + i.step + '" ' : '') + (i.min != null ? 'min="' + i.min + '" ' : '') + (i.max != null ? 'max="' + i.max + '" ' : '') + 'value="' + esc(v == null ? '' : v) + '"' + (ro || i.readonly ? ' disabled' : '') + ' onchange="EstimateApp.setInput(\'' + i.key + '\',this.value)"></label>'; });
     h += '<label class="est-in"><span class="field-label">Contingency <em>%</em></span><input class="input mono" type="number" step="1" min="0" value="' + Math.round(num((c.metadata || {}).contingency, 0) * 100) + '"' + (ro ? ' disabled' : '') + ' onchange="EstimateApp.setMeta(\'contingency\',this.value)"></label>';
     h += '<label class="est-in est-in-wide"><span class="field-label">Document name</span><input class="input" value="' + esc(c.label || t.title) + '"' + (ro ? ' disabled' : '') + ' onchange="EstimateApp.setLabel(this.value)"></label>';
     h += '</div></div>';
@@ -219,6 +240,11 @@
     h += '<span class="k">WeQuote</span><span>' + (L.wq_quote_no ? '#' + esc(L.wq_quote_no) : '<span class="muted">no quote yet</span>') + '</span>';
     h += '<span class="k">Estimates</span><span>' + (S.list.length ? S.list.map(function (e) { return 'R' + e.rev + ' ' + e.status; }).join(' · ') : '—') + '</span>';
     if (ests.length) h += '<span class="k">Cost records</span><span>' + ests.map(function (e) { return esc(e.id); }).join(' · ') + '</span>';
+    // 1.1.0 — what this estimate reads from the project (Takeoffs + the design apps' summaries + the other estimates)
+    var md = p.metadata || {}, ts = md.takeoff_summary, pts = ts && (ts.places || []).filter(function (x) { return x.kind === 'symbol'; }).length;
+    h += '<span class="k">Takeoffs</span><span>' + (pts ? pts + ' points · ' + (ts.rooms || '—') + ' rooms · ' + (ts.floors || '—') + ' floors' : '<span class="muted">no plan yet</span>') + '</span>';
+    if (md.cinema_design_summary && md.cinema_design_summary.room) { var r = md.cinema_design_summary.room; h += '<span class="k">Cinema Design</span><span>' + [r.w_mm, r.d_mm, r.h_mm].join(' × ') + ' mm</span>'; }
+    if ((S.linked || []).length) h += '<span class="k">Room estimates</span><span>' + S.linked.map(function (e) { return esc(e.label || e.kind) + ' R' + e.rev; }).join(' · ') + '</span>';
     h += '</div>';
     var prog = (t.progress || []).map(function (g) { var u = appUrl(g.app); return u ? '<a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="' + esc(u + (u.indexOf('?') >= 0 ? '&' : '?') + 'project=' + encodeURIComponent(p.id) + (S.cur && S.cur.id ? '&estimate=' + S.cur.id : '')) + '">' + esc(g.label) + ' →</a>' : ''; }).join('');
     if (prog) h += '<div class="est-ptt" style="margin-top:12px">Progress →</div><div class="est-prog">' + prog + '</div><p class="small muted">Opens the design app on this project; it reads this estimate\'s inputs through the project links.</p>';
@@ -270,7 +296,7 @@
     var ref = (String(p.ref || '').match(/^(\d{3,5}|ENQ-[A-Z0-9]+)/i) || [])[1] || ((p.metadata && p.metadata.lab && p.metadata.lab.key) || '');
     return Object.assign({ budget: b, doc: c.label || t.title, title: title, subtitle: 'Preliminary budget · R' + c.rev, client: p.client_name || '', project: (p.name || title), ref: [ref, 'R' + c.rev].filter(Boolean).join(' · '),
       date: new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }), base: '../data/', coverUrl: '../data/estimate-cover.jpg',
-      overview: { intro: (t.overview || {}).intro || 'A first budget for your ' + (t.title || 'project').replace(/ estimate$/i, '').toLowerCase() + ', by system. The design and a measured quotation follow.', rows: rows, points: (t.overview || {}).points || [] },
+      overview: { rowsHead: t.source === 'takeoff' ? 'THE HOUSE · FROM THE PLAN' : 'THE ROOM', intro: (t.overview || {}).intro || 'A first budget for your ' + (t.title || 'project').replace(/ estimate$/i, '').toLowerCase() + ', by system. The design and a measured quotation follow.', rows: rows, points: (t.overview || {}).points || [] },
       products: E.products(estModel(), lib), basisExtra: { included: t.included || [], excluded: t.excluded || [] },
       filename: 'sonor-' + A.kind + '-estimate-' + (ref || 'project').toLowerCase() + '-r' + c.rev + '.pdf' }, pf);
   }

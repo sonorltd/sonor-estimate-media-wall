@@ -28,7 +28,7 @@
 */
 (function (global) {
   'use strict';
-  var VERSION = '1.0.0';
+  var VERSION = '1.1.0';
   var VAT = 0.2;
 
   function num(v, d) { var n = Number(v); return isFinite(n) ? n : (d == null ? 0 : d); }
@@ -132,6 +132,70 @@
       return { key: ts.key, service_nn: ts.service_nn || null, hex: ts.hex || null, title: ts.title, optional: !!ts.optional, note: ts.note || null, rows: rows };
     }).filter(function (s) { return s && s.rows.length; });
   }
+  // ── Takeoffs → sections (1.1.0, Bryn 2026-11-09: "these are a front end export for what i held in the project via other apps") ──
+  // Takeoffs is the device SSOT: projects.metadata.takeoff_summary.places[kind:'symbol'] {code, label, service_nn, floor_name}.
+  // tpl.takeoff = { services: {nn: {title, per_point (ex VAT), labour_h, exclude, replaced_by: kind}}, rates: {code: {label, sell_ex, labour_h, skip}},
+  //                 patterns: [{re, label?, sell_ex, labour_h}], led_m: {label, sell_ex, labour_h} (per metre, service 04), programming: {nn, h_per_point, label} }
+  function takeoffCounts(summary) {
+    var out = {}; ((summary || {}).places || []).forEach(function (p) {
+      if (!p || p.kind !== 'symbol' || !p.code) return; var nn = String(p.service_nn || '00').padStart(2, '0');
+      var g = out[nn] = out[nn] || {}, r = g[p.code] = g[p.code] || { code: p.code, n: 0, label: p.label || p.code, floors: {} };
+      r.n++; if (p.floor_name) r.floors[p.floor_name] = (r.floors[p.floor_name] || 0) + 1;
+    });
+    return out;
+  }
+  function rateFor(tk, code, nn) {
+    var r = (tk.rates || {})[code]; if (r) return Object.assign({ source: 'rate' }, r);
+    var pt = (tk.patterns || []).find(function (x) { return new RegExp(x.re).test(code); }); if (pt) return Object.assign({ source: 'rate' }, pt);
+    var sv = (tk.services || {})[nn] || {}; return { sell_ex: sv.per_point != null ? sv.per_point : null, labour_h: sv.labour_h, source: sv.per_point != null ? 'service-rate' : 'tbc' };
+  }
+  // linked = [{kind, rev, label, sections, contingency}] — the project's own estimates of other kinds; each REPLACES the takeoff service it covers
+  function fromTakeoff(tpl, summary, opts) {
+    tpl = tpl || {}; opts = opts || {}; var tk = tpl.takeoff || {}, d = Object.assign({ margin: 0.3, labourSell: 62 }, tpl.defaults || {}, opts.defaults || {});
+    var counts = takeoffCounts(summary), linked = opts.linked || [], out = [], svcs = tk.services || {}, progPts = 0;
+    var nns = Object.keys(Object.assign({}, svcs, counts)).filter(function (nn) { return nn !== '00'; }).sort();
+    nns.forEach(function (nn) {
+      var sv = svcs[nn] || {}, g = counts[nn] || {}, link = sv.replaced_by && linked.find(function (e) { return e.kind === sv.replaced_by; });
+      if (sv.exclude) return;
+      if (link) {   // the room's own estimate (Cinema / Media Wall …) carries this service — its section totals, never the raw takeoff points
+        var lb = budget({ sections: link.sections, contingency: link.contingency || 0 }, { noDefaultFlag: true }), rows = [];
+        lb.sections.forEach(function (s) { if (s.total != null) rows.push({ label: s.title, qty: 1, inc: s.total, linked: true }); if (s.options_inc) rows.push({ label: s.title + ' — options', qty: 1, inc: s.options_inc, optional: true, linked: true }); });
+        if (rows.length) out.push({ key: 'est-' + link.kind, service_nn: nn, title: sv.linked_title || sv.title || link.label, note: 'From the ' + (link.label || link.kind) + ' R' + (link.rev || 1) + ' — change it there and re-read.', rows: rows, source: { estimate_id: link.id || null, kind: link.kind, rev: link.rev } });
+        return;
+      }
+      var hours = 0, rows = [];
+      Object.keys(g).map(function (k) { return g[k]; }).sort(function (a, b) { return b.n - a.n || String(a.code).localeCompare(b.code); }).forEach(function (c) {
+        var r = rateFor(tk, c.code, nn); if (r.skip) return;
+        var unit = r.sell_ex == null ? 0 : num(r.sell_ex), lh = r.labour_h != null ? num(r.labour_h) : num(sv.labour_h, 0);
+        hours += lh * c.n; if (nn >= '02' && nn <= '08') progPts += c.n;
+        var own = (tk.rates || {})[c.code], lbl = own && own.label ? own.label : (c.label && c.label !== c.code ? c.label : (r.label || c.code));
+        rows.push({ label: lbl, qty: c.n, unit: 'no.', unit_sell_ex: unit, sell_ex: Math.round(unit * c.n * 100) / 100, allowance: r.source !== 'rate', price_source: r.source, takeoff_code: c.code, labour_h: lh });
+      });
+      if (nn === '04' && tk.led_m && summary && num(summary.led_m) > 0) { var m = Math.round(num(summary.led_m) * 10) / 10; hours += num(tk.led_m.labour_h) * m; rows.push({ label: (tk.led_m.label || 'LED strip, drivers and fitting') + ' · ' + m + ' m', qty: m, unit: 'm', unit_sell_ex: num(tk.led_m.sell_ex), sell_ex: Math.round(num(tk.led_m.sell_ex) * m * 100) / 100, qtyInLabel: false, takeoff_code: 'led_m', price_source: 'rate' }); }
+      if (!rows.length) return;
+      if (hours > 0 && sv.labour !== false) rows.push({ label: sv.labour_label || 'Installation and commissioning', qty: 1, sell_ex: Math.round(hours * d.labourSell * 100) / 100, labour_h: Math.round(hours * 10) / 10, labour: true });
+      out.push({ key: 'svc-' + nn, service_nn: nn, title: sv.title || ('Service ' + nn), note: sv.note || null, rows: rows });
+    });
+    var pg = tk.programming; if (pg && progPts) { var sec = out.find(function (s) { return s.service_nn === pg.nn; }); var h = Math.round(progPts * num(pg.h_per_point) * 10) / 10; var row = { label: pg.label || 'Programming and commissioning', qty: 1, sell_ex: Math.round(h * d.labourSell * 100) / 100, labour_h: h, labour: true }; if (sec) sec.rows.push(row); }
+    return out;
+  }
+  // the project's estimates of other kinds, newest usable rev each (sent wins over draft; superseded never)
+  function pickLinked(rows, kinds) {
+    var by = {}; (rows || []).forEach(function (e) { if (e.status === 'superseded' || (kinds && kinds.indexOf(e.kind) < 0)) return; var b = by[e.kind]; if (!b || (e.status === 'sent' && b.status !== 'sent') || (e.status === b.status && e.rev > b.rev)) by[e.kind] = e; });
+    return Object.keys(by).map(function (k) { var e = by[k]; return { id: e.id, kind: e.kind, rev: e.rev, label: e.label, sections: e.sections || [], contingency: num((e.metadata || {}).contingency, 0) }; });
+  }
+  // the design apps' own summaries on the project record → estimate inputs (never typed twice, §66)
+  function inputsFromSummaries(md) {
+    md = md || {}; var o = {}, cd = md.cinema_design_summary || {}, rm = cd.room || {};
+    if (rm.w_mm) o.w_mm = num(rm.w_mm); if (rm.d_mm) o.d_mm = num(rm.d_mm); if (rm.h_mm) o.h_mm = num(rm.h_mm);
+    if (cd.seating && cd.seating.count) o.seats = num(cd.seating.count);
+    if (cd.display) { var mm = /(\d{2,3})/.exec(String(cd.display.label || cd.display.mode || '')); if (mm) o.screen_in = num(mm[1]); o.projector = /^pj/i.test(String(cd.display.mode || '')) ? 1 : 0; }
+    if (cd.audio && cd.audio.atmos_config) { var at = String(cd.audio.atmos_config).split('.'); if (at.length === 3) o.heights = num(at[2]); }
+    var ts = md.takeoff_summary || {}; if (ts.rooms) o.rooms = num(ts.rooms); if (ts.floors) o.floors = num(ts.floors);
+    if (!o.h_mm && md.ceiling_height_mm) o.h_mm = num(md.ceiling_height_mm);
+    return o;
+  }
+
   // metres from the mm inputs (w, d, h, depth) so expressions read naturally: (w + d) * 2 * h
   function derive(i) { [['w', 'w_mm'], ['d', 'd_mm'], ['h', 'h_mm'], ['depth', 'depth_mm']].forEach(function (k) { if (i[k[0]] == null && i[k[1]] != null) i[k[0]] = num(i[k[1]]) / 1000; }); return i; }
   function defaultsOf(tpl) { var o = {}; (tpl.inputs || []).forEach(function (i) { if (i.default != null) o[i.key] = i.default; }); return o; }
@@ -201,14 +265,26 @@
   }
   // THE shared Preliminary budget page — byte-for-byte the Stretched Fabric v0.4.2 secBudget layout.
   // opts: { doc: 'CINEMA ESTIMATE', head: 'PRELIMINARY BUDGET', eyebrow, title, intro, basis: true|false (draw Basis + flags at the foot) }
+  // budgetPages(b, opts) — the same page, continued over as many pages as the sections need (1.1.0: a whole house runs to ~80 rows)
+  function budgetPages(b, opts) {
+    opts = opts || {}; if (!b || !b.sections || !b.sections.length) return [];
+    var lx = lxOf(), A4 = lx.A4, cols = A4.w > A4.h ? 2 : 1, RH = 14;
+    var hOf = function (sec) { return 24 + (sec.rows || []).length * RH + (sec.total != null ? RH + 4 : 0) + (sec.note ? 12 : 0) + 14; };
+    var capFirst = (A4.h - 70 - 254) * cols * 0.9, capNext = (A4.h - 70 - 180) * cols * 0.9, cap = capFirst, used = 0, cur = [], chunks = [];
+    b.sections.forEach(function (sec) { var h = hOf(sec); if (cur.length && used + h > cap) { chunks.push(cur); cur = []; used = 0; cap = capNext; } cur.push(sec); used += h; });
+    chunks.push(cur);
+    var basisH = opts.basis !== false ? 20 + (b.basis || []).length * 14 + (b.flags || []).length * 44 : 0, basisFits = !basisH || used + basisH <= cap;
+    var si0 = 0;
+    return chunks.map(function (secs, i) { var o = Object.assign({}, opts, { cont: i > 0, si0: si0, totals: b, basis: i === chunks.length - 1 && basisFits ? opts.basis : false }); si0 += secs.length; return budgetPage(Object.assign({}, b, { sections: secs }), o); });
+  }
   function budgetPage(b, opts) {
     opts = opts || {}; if (!b || !b.sections || !b.sections.length) return null;
     return function (P, F, pageNo, TOTAL) {
       var lx = lxOf(), M = lx.M, A4 = lx.A4, COL = lx.COL, W = A4.w - M * 2;
       lx.pageHead(P, F, opts.head || 'PRELIMINARY BUDGET', pageNo, TOTAL, opts.doc || 'ESTIMATE', { brand: 'large' });
-      var y0 = Math.max(lx.sectionHead(P, F, opts.eyebrow || 'BUDGET · NOT A QUOTATION', opts.title || 'Preliminary budget', b.intro || opts.intro || 'Allowances by system, including VAT. The quotation carries the detail; options are shown as the change they make.'), 170);
-      cards(P, F, lx, b, M, y0, W);
-      var top = y0 + 84, bottom = A4.h - 70, landscape = A4.w > A4.h, cols = landscape ? 2 : 1, gap = 28, colW = (W - gap * (cols - 1)) / cols;
+      var y0 = Math.max(lx.sectionHead(P, F, opts.cont ? 'BUDGET · CONTINUED' : (opts.eyebrow || 'BUDGET · NOT A QUOTATION'), opts.title || 'Preliminary budget', opts.cont ? null : (b.intro || opts.intro || 'Allowances by system, including VAT. The quotation carries the detail; options are shown as the change they make.')), 170);
+      if (!opts.cont) cards(P, F, lx, opts.totals || b, M, y0, W);
+      var top = y0 + (opts.cont ? 10 : 84), bottom = A4.h - 70, landscape = A4.w > A4.h, cols = landscape ? 2 : 1, gap = 28, colW = (W - gap * (cols - 1)) / cols;
       var col = 0, y = top, RH = 14, withBasis = opts.basis !== false;
       function xcol() { return M + col * (colW + gap); }
       function need(h) { if (y + h > bottom && col < cols - 1) { col++; y = top; } }
@@ -219,7 +295,7 @@
         if (cols > 1 && col === 0 && hRun > 0 && hRun + h > hAll / 2 + 20) { col = 1; y = top; }   // balance the two columns
         hRun += h; need(Math.min(h, bottom - top));
         var x = xcol(), hex = lx.hexRgb(hexOf(sec)), secTop = y;
-        P.tracked('§' + String(si + 1).padStart(2, '0'), x + 12, y + 1, 7, F.r, hex, 2.2); P.text(fit(F.b, sec.title, 12.5, colW - 110), x + 42, y - 2, 12.5, F.b, COL.INK);
+        P.tracked('§' + String(si + 1 + (opts.si0 || 0)).padStart(2, '0'), x + 12, y + 1, 7, F.r, hex, 2.2); P.text(fit(F.b, sec.title, 12.5, colW - 110), x + 42, y - 2, 12.5, F.b, COL.INK);
         if (sec.optional) { var lab0 = 'OPTION', lw0 = F.b.widthOfTextAtSize(lab0, 6.5) + 24, px0 = x + 42 + F.b.widthOfTextAtSize(fit(F.b, sec.title, 12.5, colW - 110), 12.5) + 10; P.rrect(px0, y - 3, lw0, 13, 2, COL.GOLD, 0.8, 0.9); P.tracked(lab0, px0 + 7, y + 1, 6.5, F.b, COL.GOLD, 1.4); }
         y += 22;
         rows.forEach(function (r) {
@@ -266,7 +342,7 @@
     var pages = [];
     if (has('overview')) pages.push(pageOverview(m, b, DOC));
     if (has('products') && (m.products || []).length) { var per = land ? 8 : 4; for (var k = 0; k < m.products.length; k += per) pages.push(pageProducts(m, m.products.slice(k, k + per), DOC, prodImgs, k > 0)); }
-    if (has('budget') && b && b.sections.length) pages.push(budgetPage(b, { doc: DOC, basis: !has('basis') }));
+    if (has('budget') && b && b.sections.length) budgetPages(b, { doc: DOC, basis: !has('basis') }).forEach(function (pg) { pages.push(pg); });
     if (has('basis')) pages.push(pageBasis(m, b, DOC));
     var withCover = has('cover'), TOTAL = pages.length + (withCover ? 1 : 0) + (has('rear') ? 1 : 0);
     if (withCover) {
@@ -292,7 +368,7 @@
       var y = Math.max(lx.sectionHead(P, F, ov.eyebrow || 'AT A GLANCE', ov.title || m.title || 'Your project', ov.intro || null), 170);
       if (b) y = cards(P, F, lx, b, M, y, land ? W * 0.62 : W) + 28;
       var colW = land ? (W - 40) / 2 : W, x2 = land ? M + colW + 40 : M, yL = y, yR = land ? y : null;
-      if ((ov.rows || []).length) { P.tracked('THE ROOM', M, yL, 6.5, F.r, C.MUT, 1.5); P.hline(M, M + colW, yL + 11, C.GOLD, 0.8, 0.75); yL = lx.specRows(P, F, ov.rows, M, yL + 24, colW); }
+      if ((ov.rows || []).length) { P.tracked(ov.rowsHead || 'THE ROOM', M, yL, 6.5, F.r, C.MUT, 1.5); P.hline(M, M + colW, yL + 11, C.GOLD, 0.8, 0.75); yL = lx.specRows(P, F, ov.rows, M, yL + 24, colW); }
       var y2 = land ? yR : yL + 12;
       if (b && b.sections.length) { P.tracked('BY SYSTEM · INC. VAT', x2, y2, 6.5, F.r, C.MUT, 1.5); P.hline(x2, x2 + colW, y2 + 11, C.GOLD, 0.8, 0.75); y2 += 26;
         b.sections.forEach(function (s, i) { var hex = lx.hexRgb(hexOf(s)); P.rect(x2, y2 - 4, 3, 16, hex); P.tracked('§' + String(i + 1).padStart(2, '0'), x2 + 10, y2 + 1, 6.5, F.r, hex, 2); P.text(fit(F.b, s.title, 10.5, colW - 140), x2 + 36, y2 - 1, 10.5, F.b, C.INK);
@@ -335,8 +411,8 @@
   }
 
   var API = { VERSION: VERSION, VAT: VAT, r10: r10, money: money, signed: signed, clientLabel: clientLabel, rowInc: rowInc, rowLabel: rowLabel, hexOf: hexOf,
-    budget: budget, totals: totals, evalQty: evalQty, priceOf: priceOf, fromTemplate: fromTemplate, defaultsOf: defaultsOf, derive: derive, record: record, wqPlan: wqPlan, products: products,
-    pdf: { budgetPage: budgetPage, generate: generate, cards: cards, basis: drawBasis } };
+    budget: budget, totals: totals, evalQty: evalQty, priceOf: priceOf, fromTemplate: fromTemplate, fromTakeoff: fromTakeoff, takeoffCounts: takeoffCounts, pickLinked: pickLinked, inputsFromSummaries: inputsFromSummaries, defaultsOf: defaultsOf, derive: derive, record: record, wqPlan: wqPlan, products: products,
+    pdf: { budgetPage: budgetPage, budgetPages: budgetPages, generate: generate, cards: cards, basis: drawBasis } };
   global.SonorEstimate = API;
   if (typeof module !== 'undefined' && module.exports) module.exports = API;
 })(typeof window !== 'undefined' ? window : globalThis);

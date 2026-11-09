@@ -1,6 +1,7 @@
-# Media Wall Estimate — Claude Code Context (v0.1.0)
+# Media Wall Estimate — Claude Code Context (v0.2.0)
 
-> **Current version: v0.1.0** — 2026-11-09 BIRTH (B-809 · sonor-platform §67 · Bryn: "a quick takeoff + preliminary budget we can send a client BEFORE a WeQuote exists, with everything stored against the project so it can be progressed at any stage (survey → design app → WeQuote) without re-entering anything"). Folder name per Bryn 2026-11-09: "name the new apps, APP - ESTIMATE - Cinema for example". First fixture: ENQ-MW01 (Rohela media wall) — R1 from the R4 budget (base £14,982 inc. VAT + 10 % contingency).
+> **Current version: v0.2.0** — 2026-11-09: estimates now sit in the Hub's **Business** section; the Whole House estimate reads Takeoffs (`projects.metadata.takeoff_summary`) and the room estimates replace their service; Demo is the worked example (1410 floorplans = Demo). Fonts use the shared brand.css tokens.
+> v0.1.0 — 2026-11-09 BIRTH (B-809 · sonor-platform §67 · Bryn: "a quick takeoff + preliminary budget we can send a client BEFORE a WeQuote exists, with everything stored against the project so it can be progressed at any stage (survey → design app → WeQuote) without re-entering anything"). Folder name per Bryn 2026-11-09: "name the new apps, APP - ESTIMATE - Cinema for example". First fixture: ENQ-MW01 (Rohela media wall) — R1 from the R4 budget (base £14,982 inc. VAT + 10 % contingency).
 
 > **Spine version: 1.3** (SONOR-APP-SPINE.md — SonorShell-mounted, graphite)
 > Inherits: `../CLAUDE.md` (master brand rules + cross-project references)
@@ -9,7 +10,7 @@
 > **Active theme: graphite** — back-end default (sonor-platform §2); the PDF is the client surface.
 
 ## What this is
-One of the **Estimates** family (Master Hub category "Estimates"): a quick client-facing media wall estimate — inputs → sections by
+One of the **Estimates** family (Master Hub section "Business"): a quick client-facing media wall estimate — inputs → sections by
 system → live budget cards → the one-pack PDF (Cover · Overview · Product cards · Preliminary budget · Basis · Rear, A3 / A4,
 landscape default) — stored against the project in `estimates`, so the survey, the design apps and WeQuote pick it up later.
 
@@ -48,3 +49,4 @@ None.
 
 ## Feature timeline
 - v0.1.0 (2026-11-09) — birth on the shared estimate stack (B-809).
+- v0.2.0 (2026-11-09) — Business section; Takeoffs linkage + Whole House; linked room estimates; shared font tokens; budget paginates.

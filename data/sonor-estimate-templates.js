@@ -1,5 +1,5 @@
 /* sonor-estimate-templates.js — CANONICAL MASTER (workspace root data/; synced to every estimate consumer's data/)
-   v1.0.0 · 2026-11-09 · B-809 · sonor-platform §67.  window.__SONOR_ESTIMATE_TEMPLATES__ = { <kind>: template }
+   v1.1.0 · 2026-11-09 · B-809 · sonor-platform §67 (1.1.0: Whole house estimate read from Takeoffs).  window.__SONOR_ESTIMATE_TEMPLATES__ = { <kind>: template }
    The SAME JSON is seeded into Supabase `estimate_templates` (template column) — the table wins when it loads; this file is
    the offline tier and the seed source. Edit here, re-seed (sonor-master/supabase/estimates-*.sql), sync.
 
@@ -23,7 +23,7 @@
   // ── CINEMA ESTIMATE ────────────────────────────────────────────────────────────────────────────────
   T.cinema = {
     kind: 'cinema', title: 'Cinema estimate', cover: 'cinema', app: 'estimate-cinema', version: '1.0.0',
-    progress: [{ app: 'cinemaDesign', label: 'Cinema Design', param: 'project' }, { app: 'stretchedFabric', label: 'Stretched Fabric', param: 'project' }, { app: 'ledCalc', label: 'LED Calc', param: 'project' }, { app: 'seating', label: 'Seating', param: 'project' }],
+    progress: [{ app: 'takeoffs', label: 'Takeoffs', param: 'project' }, { app: 'cinemaDesign', label: 'Cinema Design', param: 'project' }, { app: 'stretchedFabric', label: 'Stretched Fabric', param: 'project' }, { app: 'ledCalc', label: 'LED Calc', param: 'project' }, { app: 'seating', label: 'Seating', param: 'project' }, { app: 'estimate-whole-home', label: 'Whole House Estimate', param: 'project' }],
     inputs: [
       { key: 'w_mm', label: 'Room width', unit: 'mm', default: 5000, step: 50 },
       { key: 'd_mm', label: 'Room depth', unit: 'mm', default: 6000, step: 50 },
@@ -83,7 +83,7 @@
   // ── MEDIA WALL ESTIMATE (ENQ-MW01 R4 pattern: build · finishes · lighting · electrical · fire · AV · making good, + 10 % contingency) ──
   T['media-wall'] = {
     kind: 'media-wall', title: 'Media wall estimate', cover: 'contract', app: 'estimate-media-wall', version: '1.0.0',
-    progress: [{ app: 'mediaWall', label: 'Media Wall', param: 'project' }, { app: 'ledCalc', label: 'LED Calc', param: 'project' }],
+    progress: [{ app: 'takeoffs', label: 'Takeoffs', param: 'project' }, { app: 'mediaWall', label: 'Media Wall', param: 'project' }, { app: 'ledCalc', label: 'LED Calc', param: 'project' }, { app: 'estimate-whole-home', label: 'Whole House Estimate', param: 'project' }],
     inputs: [
       { key: 'w_mm', label: 'Wall width', unit: 'mm', default: 4500, step: 10 },
       { key: 'h_mm', label: 'Ceiling height', unit: 'mm', default: 2400, step: 10 },
@@ -133,7 +133,7 @@
   // ── MEDIA ROOM ESTIMATE (the cinema pattern without the dedicated room: TV, sound, lighting, control) ──
   T['media-room'] = {
     kind: 'media-room', title: 'Media room estimate', cover: 'cinema', app: 'estimate-media-room', version: '1.0.0',
-    progress: [{ app: 'cinemaDesign', label: 'Cinema Design', param: 'project' }, { app: 'mediaWall', label: 'Media Wall', param: 'project' }, { app: 'ledCalc', label: 'LED Calc', param: 'project' }],
+    progress: [{ app: 'takeoffs', label: 'Takeoffs', param: 'project' }, { app: 'cinemaDesign', label: 'Cinema Design', param: 'project' }, { app: 'mediaWall', label: 'Media Wall', param: 'project' }, { app: 'ledCalc', label: 'LED Calc', param: 'project' }, { app: 'estimate-whole-home', label: 'Whole House Estimate', param: 'project' }],
     inputs: [
       { key: 'w_mm', label: 'Room width', unit: 'mm', default: 4500, step: 50 },
       { key: 'd_mm', label: 'Room depth', unit: 'mm', default: 5000, step: 50 },
@@ -178,7 +178,83 @@
 
   // ── the pattern for the next kinds (title + cover + progress only until their sections are agreed) ──
   T['garden-lighting'] = { kind: 'garden-lighting', title: 'Garden lighting estimate', cover: 'garden', app: 'estimate-garden-lighting', version: '0.0.0', draft: true, progress: [{ app: 'gardenLighting', label: 'Garden Lighting', param: 'project' }], inputs: [{ key: 'fittings', label: 'Fittings', default: 12 }, { key: 'zones', label: 'Zones', default: 3 }], sections: [] };
-  T['whole-home'] = { kind: 'whole-home', title: 'Whole home estimate', cover: 'scope', app: 'estimate-whole-home', version: '0.0.0', draft: true, progress: [{ app: 'takeoffs', label: 'Takeoffs', param: 'project' }], inputs: [{ key: 'rooms', label: 'Rooms', default: 10 }, { key: 'floors', label: 'Floors', default: 2 }], sections: [] };
+  // ── WHOLE HOUSE ESTIMATE (1.1.0, 2026-11-09 — Bryn: "a whole house estimate for all services … linked with takeoffs and other apps so it
+  //    all syncs, essentially these are a front end export for what i held in the project via other apps") ──
+  // Sections are READ from Takeoffs (projects.metadata.takeoff_summary — one row per symbol code, counted), priced per point at the
+  // rates below, labour per point per service; a room that has its own estimate (Cinema, Media Wall, Media Room) replaces the raw
+  // takeoff points of that service with that estimate's section totals. Nothing is typed: re-read after Takeoffs changes.
+  // RATES = BUDGET RATES PER POINT ex VAT (product + cable + termination), first pass 2026-11-09 — Sonor to review against WeQuote.
+  T['whole-home'] = {
+    kind: 'whole-home', title: 'Whole house estimate', cover: 'scope', app: 'estimate-whole-home', version: '1.0.0', source: 'takeoff',
+    progress: [{ app: 'takeoffs', label: 'Takeoffs', param: 'project' }, { app: 'cinemaDesign', label: 'Cinema Design', param: 'project' }, { app: 'estimate-cinema', label: 'Cinema Estimate', param: 'project' }, { app: 'ledCalc', label: 'LED Calc', param: 'project' }, { app: 'gardenLighting', label: 'Garden Lighting', param: 'project' }],
+    inputs: [
+      { key: 'rooms', label: 'Rooms (from Takeoffs)', default: null, readonly: true },
+      { key: 'floors', label: 'Floors (from Takeoffs)', default: null, readonly: true }
+    ],
+    defaults: { margin: 0.3, labourSell: 62, labourCost: 31, contingency: 0 },
+    takeoff: {
+      services: {
+        '01': { title: 'Cinema room', per_point: 300, labour_h: 1.5, replaced_by: 'cinema', linked_title: 'Cinema room' },
+        '02': { title: 'Multi-room audio', per_point: 250, labour_h: 1.0 },
+        '03': { title: 'Video distribution and TVs', per_point: 200, labour_h: 1.5 },
+        '04': { title: 'Lighting and lighting control', per_point: 120, labour_h: 0.75 },
+        '05': { title: 'Shading and automation', per_point: 250, labour_h: 1.5 },
+        '06': { title: 'Heating controls', per_point: 150, labour_h: 1.0 },
+        '07': { title: 'Control system', per_point: 400, labour_h: 2.0 },
+        '08': { title: 'Security, CCTV and access', per_point: 200, labour_h: 1.25 },
+        '09': { title: 'Network and Wi-Fi', per_point: 200, labour_h: 0.75 },
+        '10': { title: 'Infrastructure and racks', per_point: 150, labour_h: 1.0 },
+        '11': { title: 'Electrical', exclude: true }
+      },
+      rates: {
+        // 01 cinema (used only when the project has no Cinema estimate)
+        'AMP': { label: 'Cinema AV processor / amplifier', sell_ex: 3200, labour_h: 2 }, 'PROJ-4K': { label: '4K projector', sell_ex: 6500, labour_h: 3 },
+        '1-SUB-CIN': { label: 'Cinema subwoofer', sell_ex: 1300 }, 'RACK': { label: 'Cinema equipment rack', sell_ex: 450 }, 'FAB-TRACK-H': { skip: true },
+        // 02 audio
+        '3-SPKR-CEIL': { label: 'Ceiling speaker', sell_ex: 220 }, '3-SPKR-OUT': { label: 'Outdoor speaker', sell_ex: 260 }, '3-SUB': { label: 'Subwoofer', sell_ex: 900 },
+        '4-TRIAD-PAMP8': { label: '8-channel power amplifier', sell_ex: 1450, labour_h: 1.5 }, '1-STREAMER': { label: 'Network streamer', sell_ex: 650 }, '2-SBAR-M': { label: 'Soundbar', sell_ex: 1100 },
+        // 03 video
+        'TVPOINT-4K': { label: 'TV point — 4K', sell_ex: 180 }, '3-MATRIX-8X8': { label: 'HDMI matrix 8 × 8', sell_ex: 3200, labour_h: 3 },
+        'MNT-FIXED': { label: 'Fixed TV mount', sell_ex: 90, labour_h: 0.75 }, 'MNT-TILT': { label: 'Tilt TV mount', sell_ex: 120, labour_h: 0.75 }, 'MNT-FM': { label: 'Full-motion TV mount', sell_ex: 280, labour_h: 1 },
+        // 04 lighting
+        '21-SPOT': { label: 'Surface spotlight', sell_ex: 85 }, '22-STEP': { label: 'Step / plinth light', sell_ex: 75 }, '24-PEND': { label: 'Pendant — connection (fitting by client)', sell_ex: 40, labour_h: 0.5 },
+        '24-PEND-LIN': { label: 'Linear pendant — connection (fitting by client)', sell_ex: 60, labour_h: 0.75 }, '4-LED-DRV': { label: 'LED driver', sell_ex: 120 },
+        '5-DMX-CL': { label: 'DMX lighting interface', sell_ex: 650, labour_h: 1.5 }, '5-DMX-DRV': { label: 'DMX decoder and LED driver', sell_ex: 180 },
+        '6-BATTEN': { label: 'Batten / strip light', sell_ex: 90 }, '6-WALL': { label: 'Wall light', sell_ex: 120 }, 'KP-LUXB': { label: 'Lighting keypad', sell_ex: 260, labour_h: 0.5 },
+        'LPNL': { label: 'Lighting control panel (dimming modules)', sell_ex: 1800, labour_h: 6 }, '2-PIR': { label: 'Presence sensor', sell_ex: 140 },
+        // 05 automation
+        'SHPNL-QS': { label: 'Shade panel — Lutron QS', sell_ex: 1200, labour_h: 4 }, 'SHPNL-RLY': { label: 'Shade panel — relay', sell_ex: 650, labour_h: 3 },
+        '6-GARAGE': { label: 'Garage door integration', sell_ex: 350 }, '4-PIR-CEIL': { label: 'Ceiling PIR', sell_ex: 120 }, '3-DOOR': { label: 'Door / window contact', sell_ex: 60, labour_h: 0.5 },
+        // 06 heating
+        'NEOSTAT': { label: 'Heatmiser neoStat (wired)', sell_ex: 140 }, 'NEOHUB': { label: 'Heatmiser neoHub', sell_ex: 180 }, 'UH8': { label: 'Heatmiser UH8 wiring centre', sell_ex: 220, labour_h: 2 },
+        'UFH': { label: 'UFH manifold — controls connection (manifold by plumber)', sell_ex: 150 }, '1-TC-HW': { label: 'Hot water timeclock', sell_ex: 90, labour_h: 0.5 }, '1-TC-TOWEL': { label: 'Towel rail timeclock', sell_ex: 90, labour_h: 0.5 },
+        // 07 control
+        '1-PROC-MAIN': { label: 'Control processor', sell_ex: 2200, labour_h: 3 }, '2-TP-T4IW8': { label: '8-inch in-wall touch panel', sell_ex: 1650, labour_h: 1.5 }, '3-REM-HAND': { label: 'Handheld remote', sell_ex: 420, labour_h: 0.5 },
+        // 08 security
+        '1-CAM-TURRET': { label: 'CCTV turret camera', sell_ex: 380, labour_h: 1.5 }, '2-NVR-8': { label: 'NVR — 8 channel', sell_ex: 650, labour_h: 2 }, '4-ANSWER': { label: 'Intercom answer station', sell_ex: 520 },
+        '4-GATE-INTC': { label: 'Gate intercom (video door station)', sell_ex: 900, labour_h: 2 }, '4-GATE-REL': { label: 'Gate release interface', sell_ex: 120 }, 'DBELL': { label: 'Video doorbell', sell_ex: 320 },
+        'ALM-DOOR': { label: 'Alarm door contact', sell_ex: 45, labour_h: 0.5 }, 'ALM-MTN': { label: 'Alarm motion detector', sell_ex: 75, labour_h: 0.75 }, 'SIREN': { label: 'Alarm siren', sell_ex: 160 },
+        // 09 network
+        'WAP-CEIL': { label: 'Ceiling Wi-Fi access point', sell_ex: 320 }, '2-AP-OUT': { label: 'Outdoor Wi-Fi access point', sell_ex: 420, labour_h: 1.5 }, '3-DATA-TWIN': { label: 'Twin data point', sell_ex: 120 },
+        '4-PATCH-24': { label: '24-port patch panel', sell_ex: 180, labour_h: 2 }, 'RTR': { label: 'Router / firewall', sell_ex: 450 }, 'SW-24-POE': { label: '24-port PoE switch', sell_ex: 950 }, 'SW-8-POE': { label: '8-port PoE switch', sell_ex: 320 },
+        // 10 infrastructure
+        '3-RACK-18U': { label: '18U comms rack', sell_ex: 650, labour_h: 3 }, '2-RACK-WALL': { label: 'Wall rack', sell_ex: 280, labour_h: 1.5 }, '1-UPS': { label: 'UPS', sell_ex: 550 },
+        '7-AERIAL': { label: 'TV aerial', sell_ex: 250, labour_h: 2 }, '7-IRS-COMBO': { label: 'Satellite dish and aerial (IRS)', sell_ex: 850, labour_h: 4 },
+        '8-BT-MASTER': { skip: true }, '8-ONT': { skip: true }, 'NODE-0': { skip: true }, 'NODE-1': { skip: true }
+      },
+      patterns: [
+        { re: '^SPKR-', label: 'Cinema speaker', sell_ex: 450, labour_h: 1 }, { re: '^ACOUSTIC-', label: 'Acoustic treatment', sell_ex: 250, labour_h: 1 },
+        { re: '^20-DL-', label: 'Downlight', sell_ex: 65, labour_h: 0.5 }, { re: '^23-', label: 'Wall light', sell_ex: 140 }, { re: '^27-', label: 'Exterior light', sell_ex: 160, labour_h: 1 }
+      ],
+      led_m: { label: 'LED strip, drivers and fitting', sell_ex: 45, labour_h: 0.25 },
+      programming: { nn: '07', h_per_point: 0.1, label: 'Programming and commissioning — whole house' }
+    },
+    basis: ['Points and quantities from the Takeoffs plan of the house; final figures follow the survey and design.', 'Budget rates per point include the product, cable and termination at a standard specification.', 'Rooms with their own estimate (for example the cinema) carry that estimate\'s figures.', 'Includes VAT at 20%; excludes building work, decoration and anything not described.'],
+    flags: [{ label: 'Electrical · by others', text: 'Electrical work is not included — supplies, sockets, circuits and connections by the site electrician.', hex: '#ec6061' }],
+    included: ['Supply, installation and commissioning of the systems listed.', 'Programming of the control system and a handover.', 'Cable and termination for every point shown.'],
+    excluded: ['Building and decorating.', 'Electrical supplies, sockets and circuits (site electrician).', 'Light fittings chosen by the client unless listed.'],
+    overview: { points: ['A preliminary budget for the whole house by system, read from the plan.', 'Each system can be designed and quoted in full from here.'] }
+  };
 
   global.__SONOR_ESTIMATE_TEMPLATES__ = T;
   if (typeof module !== 'undefined' && module.exports) module.exports = T;
