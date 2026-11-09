@@ -28,7 +28,7 @@
 */
 (function (global) {
   'use strict';
-  var VERSION = '1.1.0';
+  var VERSION = '1.3.0';
   var VAT = 0.2;
 
   function num(v, d) { var n = Number(v); return isFinite(n) ? n : (d == null ? 0 : d); }
@@ -63,7 +63,7 @@
       var secOpt = !!sx.optional, tot = 0, optTot = 0;
       var rows = (sx.rows || []).filter(function (r) { return r && !r.hidden && (r.label || r.inc || r.sell_ex); }).map(function (r) {
         var inc = rowInc(r, o), opt = secOpt || !!r.optional;
-        return { label: rowLabel(r), inc: inc, optional: opt, allowance: !!r.allowance, model_id: r.model_id || null };
+        return { label: rowLabel(r), inc: inc, optional: opt, allowance: !!r.allowance, model_id: r.model_id || null, group: r.group || null };
       });
       if (sx.sortOptionsLast !== false) rows.sort(function (a, b) { return (a.optional ? 1 : 0) - (b.optional ? 1 : 0); });   // core rows first, options after
       rows.forEach(function (r) { if (r.optional) { optionsInc += r.inc; optTot += r.inc; } else { tot += r.inc; core += r.inc; if (r.allowance) allowanceInc += r.inc; } });
@@ -163,8 +163,8 @@
         if (rows.length) out.push({ key: 'est-' + link.kind, service_nn: nn, title: sv.linked_title || sv.title || link.label, note: 'From the ' + (link.label || link.kind) + ' R' + (link.rev || 1) + ' — change it there and re-read.', rows: rows, source: { estimate_id: link.id || null, kind: link.kind, rev: link.rev } });
         return;
       }
-      var hours = 0, rows = [];
-      Object.keys(g).map(function (k) { return g[k]; }).sort(function (a, b) { return b.n - a.n || String(a.code).localeCompare(b.code); }).forEach(function (c) {
+      var hours = 0, rows = [], gard = nn === (tk.garden && tk.garden.nn || '04') && opts.garden && (opts.garden.zones || []).length ? opts.garden : null;
+      Object.keys(g).map(function (k) { return g[k]; }).filter(function (c) { return !(gard && tk.garden.replaces && new RegExp(tk.garden.replaces).test(c.code)); }).sort(function (a, b) { return b.n - a.n || String(a.code).localeCompare(b.code); }).forEach(function (c) {
         var r = rateFor(tk, c.code, nn); if (r.skip) return;
         var unit = r.sell_ex == null ? 0 : num(r.sell_ex), lh = r.labour_h != null ? num(r.labour_h) : num(sv.labour_h, 0);
         hours += lh * c.n; if (nn >= '02' && nn <= '08') progPts += c.n;
@@ -172,17 +172,87 @@
         rows.push({ label: lbl, qty: c.n, unit: 'no.', unit_sell_ex: unit, sell_ex: Math.round(unit * c.n * 100) / 100, allowance: r.source !== 'rate', price_source: r.source, takeoff_code: c.code, labour_h: lh });
       });
       if (nn === '04' && tk.led_m && summary && num(summary.led_m) > 0) { var m = Math.round(num(summary.led_m) * 10) / 10; hours += num(tk.led_m.labour_h) * m; rows.push({ label: (tk.led_m.label || 'LED strip, drivers and fitting') + ' · ' + m + ' m', qty: m, unit: 'm', unit_sell_ex: num(tk.led_m.sell_ex), sell_ex: Math.round(num(tk.led_m.sell_ex) * m * 100) / 100, qtyInLabel: false, takeoff_code: 'led_m', price_source: 'rate' }); }
+      if (gard) { var gr = gardenRows(tk.garden, gard); gr.rows.forEach(function (r) { rows.push(r); }); hours += gr.hours; }
       if (!rows.length) return;
-      if (hours > 0 && sv.labour !== false) rows.push({ label: sv.labour_label || 'Installation and commissioning', qty: 1, sell_ex: Math.round(hours * d.labourSell * 100) / 100, labour_h: Math.round(hours * 10) / 10, labour: true });
+      // sub-groups inside the service (the WeQuote split — Bryn 2026-11-09: "lighting control, lighting fixtures, led …"): first match wins, else the default group
+      var gs = sv.groups || [];
+      if (gs.length) { var gi = function (r) { if (r.group) { var gk = gs.findIndex(function (x) { return x.label === r.group; }); if (gk >= 0) return gk; } var code = String(r.takeoff_code || ''); for (var i = 0; i < gs.length; i++) if (gs[i].re && new RegExp(gs[i].re, 'i').test(code)) return i; var di = gs.findIndex(function (x) { return x.default; }); return di >= 0 ? di : gs.length - 1; };
+        rows.forEach(function (r, i) { r._o = i; r._g = gi(r); r.group = gs[r._g].label; }); rows.sort(function (a, b) { return a._g - b._g || a._o - b._o; }); rows.forEach(function (r) { delete r._o; delete r._g; }); }
+      // one line per item: the same label from different plan symbols (e.g. two downlight codes) merges — qty and sell add up
+      var byL = {}; rows = rows.filter(function (r) { var k = (r.group || '') + '|' + r.label + '|' + (r.unit || ''); var m = byL[k]; if (!m) { byL[k] = r; return true; }
+        m.qty = Math.round((num(m.qty) + num(r.qty)) * 10) / 10; m.sell_ex = Math.round((num(m.sell_ex) + num(r.sell_ex)) * 100) / 100; m.unit_sell_ex = Math.round(m.sell_ex / m.qty * 100) / 100;
+        m.takeoff_codes = (m.takeoff_codes || [m.takeoff_code]).concat(r.takeoff_code); m.allowance = m.allowance || r.allowance; return false; });
+      if (hours > 0 && sv.labour !== false) rows.push({ label: sv.labour_label || 'Installation and commissioning', qty: 1, sell_ex: Math.round(hours * d.labourSell * 100) / 100, labour_h: Math.round(hours * 10) / 10, labour: true, group: gs.length ? (tk.install_group || 'Installation and programming') : null });
       out.push({ key: 'svc-' + nn, service_nn: nn, title: sv.title || ('Service ' + nn), note: sv.note || null, rows: rows });
     });
-    var pg = tk.programming; if (pg && progPts) { var sec = out.find(function (s) { return s.service_nn === pg.nn; }); var h = Math.round(progPts * num(pg.h_per_point) * 10) / 10; var row = { label: pg.label || 'Programming and commissioning', qty: 1, sell_ex: Math.round(h * d.labourSell * 100) / 100, labour_h: h, labour: true }; if (sec) sec.rows.push(row); }
+    var pg = tk.programming; if (pg && progPts) { var sec = out.find(function (s) { return s.service_nn === pg.nn; }); var h = Math.round(progPts * num(pg.h_per_point) * 10) / 10; var row = { label: pg.label || 'Programming and commissioning', qty: 1, sell_ex: Math.round(h * d.labourSell * 100) / 100, labour_h: h, labour: true, group: sec && sec.rows.some(function (r) { return r.group; }) ? (tk.install_group || 'Installation and programming') : null }; if (sec) sec.rows.push(row); }
     return out;
+  }
+  // ── freshness + log (1.3.0 — Bryn 2026-11-09: "every single project should have its data mirrored across all apps and keep log of when it
+  // was last adjusted"). Each estimate keeps source.read = { <project metadata key | 'estimate:<kind>'>: the source's own saved time } from the
+  // moment it read them; staleSources() compares that with the project as it is now. Times come from what each app already publishes.
+  var SOURCES = [
+    { key: 'takeoff_summary', label: 'Takeoffs', at: ['updated_at'] },
+    { key: 'cinema_design_summary', label: 'Cinema Design', at: ['saved_at', 'updated_at'] },
+    { key: 'stretched_fabric_spec', label: 'Stretched Fabric', at: ['updated_at'] },
+    { key: 'led_spec', label: 'LED Calc', at: ['updated_at'] },
+    { key: 'lighting_control', label: 'Lighting control', at: ['saved_at', 'updated_at'] },
+    { key: 'garden_lighting_spec', label: 'Garden Lighting', at: ['updated_at'] },
+    { key: 'cinema_takeoff_summary', label: 'Cinema Takeoff', at: ['saved_at', 'updated_at'] }
+  ];
+  var READS = { 'whole-home': ['takeoff_summary', 'garden_lighting_spec', 'estimate:*'], cinema: ['cinema_design_summary', 'stretched_fabric_spec', 'led_spec', 'cinema_takeoff_summary'], 'media-room': ['cinema_design_summary', 'led_spec', 'takeoff_summary'], 'media-wall': ['led_spec'], 'garden-lighting': ['garden_lighting_spec', 'takeoff_summary'] };
+  function readsOf(tpl, kind) { return (tpl && tpl.reads) || READS[kind] || []; }
+  function sourceAt(md, key) { var sx = SOURCES.find(function (x) { return x.key === key; }), v = md && md[key]; if (!sx || !v || typeof v !== 'object') return null; for (var i = 0; i < sx.at.length; i++) if (v[sx.at[i]]) return String(v[sx.at[i]]); return null; }
+  function sourceLabel(key) { if (/^estimate:/.test(key)) return key.slice(9).replace(/-/g, ' ').replace(/^./, function (c) { return c.toUpperCase(); }) + ' estimate'; var sx = SOURCES.find(function (x) { return x.key === key; }); return sx ? sx.label : key; }
+  // what an estimate of this template reads, stamped with each source's saved time now
+  function sourceStamps(md, reads, linked) {
+    var o = {};
+    (reads || []).forEach(function (k) {
+      if (k === 'estimate:*') { (linked || []).forEach(function (e) { if (e.updated_at) o['estimate:' + e.kind] = String(e.updated_at); }); return; }
+      var at = sourceAt(md, k); if (at) o[k] = at;
+    });
+    return o;
+  }
+  // sources changed (or newly published) since the estimate read them → [{ key, label, read_at, now_at }]
+  function staleSources(read, now) {
+    read = read || {}; var out = [];
+    Object.keys(now || {}).forEach(function (k) { var a = read[k], b = now[k]; if (!b) return; if (!a || Date.parse(b) > Date.parse(a) + 1000) out.push({ key: k, label: sourceLabel(k), read_at: a || null, now_at: b }); });
+    return out;
+  }
+  // the estimate's own history (metadata.log, newest last, capped) — who / when / what; the audit_log trigger keeps the row-level record
+  function logEntry(md, what, by, at) { md = md || {}; var log = (md.log || []).slice(-49); log.push({ at: at || new Date().toISOString(), what: String(what), by: by || null }); return Object.assign({}, md, { log: log }); }
+  // the project-record mirror (projects.metadata.estimates_summary) — one entry per kind, the newest usable revision; *_summary keys are
+  // ignored by sonor_project_activity (§55b), so publishing it never reads as a human edit
+  function summaryEntry(est, opts) {
+    opts = opts || {}; var t = est.totals || totals(est), md = est.metadata || {}, log = md.log || [];
+    return { id: est.id || null, kind: est.kind, rev: est.rev || 1, status: est.status || 'draft', label: est.label || null, core_inc: t.core_inc || 0, with_options_inc: t.with_options_inc || 0, options_inc: t.options_inc || 0,
+      sections: (est.sections || []).map(function (s) { var st = (t.sections || {})[s.key] || {}; return { key: s.key, service_nn: s.service_nn || null, title: s.title, total_inc: st.total_inc != null ? st.total_inc : null }; }),
+      updated_at: opts.at || est.updated_at || new Date().toISOString(), issued_at: md.issued_at || null, read: (est.source || {}).read || null, last: log.length ? log[log.length - 1] : null, app: 'estimate-' + est.kind, engine: VERSION };
+  }
+  function mergeSummary(cur, entry) { var o = Object.assign({}, cur || {}); o.by_kind = Object.assign({}, o.by_kind || {}); o.by_kind[entry.kind] = entry; o.updated_at = entry.updated_at; o.version = 1; return o; }
+
+  // Garden Lighting's published design (projects.metadata.garden_lighting_spec — that app is the single writer) → priced rows, grouped 'Garden lighting'.
+  // Fittings by kind (the picked product named), drivers, a switch per zone, exterior cable; replaces the plan's exterior points (tk.garden.replaces).
+  function gardenRows(cfg, spec) {
+    cfg = cfg || {}; var kinds = cfg.kinds || {}, dflt = cfg.default || { sell_ex: 180, labour_h: 1 }, by = {}, drivers = 0, cable = 0, strip = 0, switches = 0, rows = [], hours = 0, picks = spec.picks || {};
+    (spec.zones || []).forEach(function (z) {
+      (z.fixtures || []).forEach(function (f) { by[f.kind] = (by[f.kind] || 0) + num(f.qty, 1); });
+      (z.drivers || []).forEach(function (d) { drivers += num(d.qty, 1); });
+      cable += num(z.cable_m, 0); strip += num(z.strip_m, 0); switches += z.switch && z.switch.shareWith ? 0 : num((z.switch || {}).qty, 1);
+    });
+    function add(code, label, qty, unit, r) { if (!qty) return; var u = num(r.sell_ex), lh = num(r.labour_h, 0); hours += lh * qty; rows.push({ label: label, qty: Math.round(qty * 10) / 10, unit: unit, unit_sell_ex: u, sell_ex: Math.round(u * qty * 100) / 100, takeoff_code: 'garden:' + code, price_source: 'rate', group: cfg.group || 'Garden lighting', labour_h: lh, from: 'garden_lighting_spec' }); }
+    Object.keys(by).sort(function (a, b) { return by[b] - by[a]; }).forEach(function (k) { var r = kinds[k] || dflt, pk = picks[k]; add(k, (r.label || (k.charAt(0).toUpperCase() + k.slice(1) + ' light')) + (pk && pk.name ? ' — ' + [pk.manufacturer, pk.name].filter(Boolean).join(' ') : ''), by[k], 'no.', r); });
+    if (cfg.driver) add('driver', cfg.driver.label || 'Exterior LED driver', drivers, 'no.', cfg.driver);
+    if (cfg.switch) add('switch', (cfg.switch.label || 'Switching per zone') + (spec.control ? ' · ' + spec.control : ''), switches, 'no.', cfg.switch);
+    if (spec.pir && cfg.pir) add('pir', cfg.pir.label || 'PIR sensor', 1, 'no.', cfg.pir);
+    if (cfg.strip_m) add('strip', cfg.strip_m.label || 'Exterior LED strip', strip, 'm', cfg.strip_m);
+    if (cfg.cable_m) add('cable', cfg.cable_m.label || 'Exterior cable, ducting and joints', cable, 'm', cfg.cable_m);
+    return { rows: rows, hours: hours };
   }
   // the project's estimates of other kinds, newest usable rev each (sent wins over draft; superseded never)
   function pickLinked(rows, kinds) {
     var by = {}; (rows || []).forEach(function (e) { if (e.status === 'superseded' || (kinds && kinds.indexOf(e.kind) < 0)) return; var b = by[e.kind]; if (!b || (e.status === 'sent' && b.status !== 'sent') || (e.status === b.status && e.rev > b.rev)) by[e.kind] = e; });
-    return Object.keys(by).map(function (k) { var e = by[k]; return { id: e.id, kind: e.kind, rev: e.rev, label: e.label, sections: e.sections || [], contingency: num((e.metadata || {}).contingency, 0) }; });
+    return Object.keys(by).map(function (k) { var e = by[k]; return { id: e.id, kind: e.kind, rev: e.rev, status: e.status, label: e.label, updated_at: e.updated_at || null, sections: e.sections || [], contingency: num((e.metadata || {}).contingency, 0) }; });
   }
   // the design apps' own summaries on the project record → estimate inputs (never typed twice, §66)
   function inputsFromSummaries(md) {
@@ -266,51 +336,109 @@
   // THE shared Preliminary budget page — byte-for-byte the Stretched Fabric v0.4.2 secBudget layout.
   // opts: { doc: 'CINEMA ESTIMATE', head: 'PRELIMINARY BUDGET', eyebrow, title, intro, basis: true|false (draw Basis + flags at the foot) }
   // budgetPages(b, opts) — the same page, continued over as many pages as the sections need (1.1.0: a whole house runs to ~80 rows)
+  // 1.2.0 (Bryn 2026-11-09: "make everything one service per row on a3 … a4 portrait and a3 landscape will be the options"): ONE service per
+  // row on both formats. A3 landscape = a full-width band per service (title, total and note on the left; its lines in two balanced columns
+  // on the right). A4 portrait = the same band stacked (title + total on one line, the lines below in one column).
+  function bLayout(lx) {
+    var A4 = lx.A4, M = lx.M, W = A4.w - M * 2, land = A4.w > A4.h;
+    GAP = land ? 7 : 5; GH = land ? 14 : 12;   // sub-group gap + label height (set per format; read by bItems / colH / drawCol)
+    return land ? { land: true, W: W, RH: 15, FS: 9.6, TS: 13.5, headW: 250, gap: 30, sub: 2, bottom: A4.h - 62 }
+                : { land: false, W: W, RH: 12.6, FS: 8.4, TS: 11.5, headW: 0, gap: 0, sub: 1, bottom: A4.h - 60 };
+  }
+  // the section's lines as items: a small gap + group label wherever the sub-group changes (only when the section has 2+ groups)
+  var GAP = 7, GH = 14;
+  function bItems(rows, L) {
+    var gset = {}; rows.forEach(function (r) { if (r.group) gset[r.group] = 1; }); var multi = Object.keys(gset).length > 1, out = [], prev;
+    rows.forEach(function (r) { var g = r.optional ? '__opt' : (r.group || ''); if (multi && g !== prev) { out.push({ k: 'h', label: g === '__opt' ? 'Options' : (r.group || 'Other'), h: GAP + GH }); prev = g; } out.push({ k: 'r', row: r, h: L.RH }); });
+    return out;
+  }
+  // split items into n columns, balanced by height; a group label never ends a column; no leading gap at a column top
+  function bCols(items, n) {
+    if (n < 2) return [items];
+    var H = items.reduce(function (a, it) { return a + it.h; }, 0), acc = 0, cut = items.length;
+    for (var i = 0; i < items.length; i++) { if (acc + items[i].h / 2 > H / 2) { cut = i; break; } acc += items[i].h; }
+    if (cut > 0 && items[cut - 1].k === 'h') cut--;
+    var a = items.slice(0, cut), b = items.slice(cut);
+    if (b.length && b[0].k === 'r') { for (var j = a.length - 1; j >= 0; j--) if (a[j].k === 'h') { b.unshift({ k: 'h', label: a[j].label, h: GAP + GH, cont: true }); break; } }
+    return [a, b];
+  }
+  function colH(items) { return items.reduce(function (a, it, i) { return a + (i === 0 && it.k === 'h' ? GH : it.h); }, 0); }
+  function bSecH(sec, L, F, lx) {
+    var cs = bCols(bItems(sec.rows || [], L), L.sub), n = 0, rowsH = Math.max.apply(null, cs.map(colH));
+    if (L.land) {
+      var noteL = sec.note ? lx.wrap(String(sec.note), F.r, 7.8, L.headW - 24).slice(0, 3).length : 0;
+      var titleL = lx.wrap(String(sec.title || ''), F.b, L.TS, L.headW - 46).slice(0, 2).length;
+      var headH = 4 + titleL * (L.TS + 3) + (sec.total != null ? 20 : 0) + (sec.options_inc ? 13 : 0) + noteL * 10.5 + 4;
+      return Math.max(headH, rowsH) + 18;
+    }
+    return 22 + rowsH + (sec.note ? 12 : 0) + 16;
+  }
+  function bBasisH(b) { return 20 + Math.min((b.basis || []).length, 9) * 14 + (b.flags || []).length * 44; }
   function budgetPages(b, opts) {
     opts = opts || {}; if (!b || !b.sections || !b.sections.length) return [];
-    var lx = lxOf(), A4 = lx.A4, cols = A4.w > A4.h ? 2 : 1, RH = 14;
-    var hOf = function (sec) { return 24 + (sec.rows || []).length * RH + (sec.total != null ? RH + 4 : 0) + (sec.note ? 12 : 0) + 14; };
-    var capFirst = (A4.h - 70 - 254) * cols * 0.9, capNext = (A4.h - 70 - 180) * cols * 0.9, cap = capFirst, used = 0, cur = [], chunks = [];
+    var lx = lxOf(), L = bLayout(lx), F = opts.F || null;
+    var hOf = function (sec) { return F ? bSecH(sec, L, F, lx) : (L.land ? Math.max(70, Math.ceil((sec.rows || []).length / 2) * L.RH) + 22 : 22 + (sec.rows || []).length * L.RH + 28); };
+    var top0 = 248, topN = 180, capFirst = L.bottom - top0, capNext = L.bottom - topN, cap = capFirst, used = 0, cur = [], chunks = [];
     b.sections.forEach(function (sec) { var h = hOf(sec); if (cur.length && used + h > cap) { chunks.push(cur); cur = []; used = 0; cap = capNext; } cur.push(sec); used += h; });
     chunks.push(cur);
-    var basisH = opts.basis !== false ? 20 + (b.basis || []).length * 14 + (b.flags || []).length * 44 : 0, basisFits = !basisH || used + basisH <= cap;
+    var basisFits = opts.basis === false || used + bBasisH(b) <= cap;
     var si0 = 0;
     return chunks.map(function (secs, i) { var o = Object.assign({}, opts, { cont: i > 0, si0: si0, totals: b, basis: i === chunks.length - 1 && basisFits ? opts.basis : false }); si0 += secs.length; return budgetPage(Object.assign({}, b, { sections: secs }), o); });
   }
   function budgetPage(b, opts) {
     opts = opts || {}; if (!b || !b.sections || !b.sections.length) return null;
     return function (P, F, pageNo, TOTAL) {
-      var lx = lxOf(), M = lx.M, A4 = lx.A4, COL = lx.COL, W = A4.w - M * 2;
+      var lx = lxOf(), M = lx.M, A4 = lx.A4, COL = lx.COL, L = bLayout(lx), W = L.W;
       lx.pageHead(P, F, opts.head || 'PRELIMINARY BUDGET', pageNo, TOTAL, opts.doc || 'ESTIMATE', { brand: 'large' });
       var y0 = Math.max(lx.sectionHead(P, F, opts.cont ? 'BUDGET · CONTINUED' : (opts.eyebrow || 'BUDGET · NOT A QUOTATION'), opts.title || 'Preliminary budget', opts.cont ? null : (b.intro || opts.intro || 'Allowances by system, including VAT. The quotation carries the detail; options are shown as the change they make.')), 170);
       if (!opts.cont) cards(P, F, lx, opts.totals || b, M, y0, W);
-      var top = y0 + (opts.cont ? 10 : 84), bottom = A4.h - 70, landscape = A4.w > A4.h, cols = landscape ? 2 : 1, gap = 28, colW = (W - gap * (cols - 1)) / cols;
-      var col = 0, y = top, RH = 14, withBasis = opts.basis !== false;
-      function xcol() { return M + col * (colW + gap); }
-      function need(h) { if (y + h > bottom && col < cols - 1) { col++; y = top; } }
-      var hOf = function (sec) { return 24 + (sec.rows || []).length * RH + (sec.total != null ? RH + 4 : 0) + (sec.note ? 12 : 0) + 14; };
-      var hAll = b.sections.reduce(function (a, sec) { return a + hOf(sec); }, 0) + (withBasis ? 20 + (b.basis || []).length * 14 + (b.flags || []).length * 44 : 0), hRun = 0;
-      b.sections.forEach(function (sec, si) {
-        var rows = sec.rows || [], h = hOf(sec);
-        if (cols > 1 && col === 0 && hRun > 0 && hRun + h > hAll / 2 + 20) { col = 1; y = top; }   // balance the two columns
-        hRun += h; need(Math.min(h, bottom - top));
-        var x = xcol(), hex = lx.hexRgb(hexOf(sec)), secTop = y;
-        P.tracked('§' + String(si + 1 + (opts.si0 || 0)).padStart(2, '0'), x + 12, y + 1, 7, F.r, hex, 2.2); P.text(fit(F.b, sec.title, 12.5, colW - 110), x + 42, y - 2, 12.5, F.b, COL.INK);
-        if (sec.optional) { var lab0 = 'OPTION', lw0 = F.b.widthOfTextAtSize(lab0, 6.5) + 24, px0 = x + 42 + F.b.widthOfTextAtSize(fit(F.b, sec.title, 12.5, colW - 110), 12.5) + 10; P.rrect(px0, y - 3, lw0, 13, 2, COL.GOLD, 0.8, 0.9); P.tracked(lab0, px0 + 7, y + 1, 6.5, F.b, COL.GOLD, 1.4); }
-        y += 22;
-        rows.forEach(function (r) {
-          var lab = fit(F.r, r.label, 8.8, colW - 110);
-          P.text(lab, x + 12, y - 2, 8.8, F.r, COL.INK2);
-          if (r.optional || r.allowance) { var tg = [r.optional ? 'OPTION' : null, r.allowance ? 'ALLOWANCE' : null].filter(Boolean).join(' · '); P.tracked(tg, x + 12 + F.r.widthOfTextAtSize(lab, 8.8) + 6, y + 1, 5.5, F.r, r.optional ? COL.GOLD : COL.MUT, 1.2); }
-          P.right(r.optional ? signed(r.inc) : money(r.inc), x + colW, y - 2, 8.8, F.r, COL.INK);
-          y += RH;
+      var y = y0 + (opts.cont ? 10 : 78), RH = L.RH, FS = L.FS, withBasis = opts.basis !== false;
+      function rowAt(r, x, w, yy) {
+        var tg = [r.optional ? 'OPTION' : null, r.allowance ? 'ALLOWANCE' : null].filter(Boolean).join(' · '), tgW = tg ? F.r.widthOfTextAtSize(tg, 5.8) + 14 : 0;
+        var lab = fit(F.r, r.label, FS, w - 78 - tgW);
+        P.text(lab, x, yy - 2, FS, F.r, COL.INK2);
+        if (tg) P.tracked(tg, x + F.r.widthOfTextAtSize(lab, FS) + 6, yy + 1, 5.8, F.r, r.optional ? COL.GOLD : COL.MUT, 1.2);
+        P.right(r.optional ? signed(r.inc) : money(r.inc), x + w, yy - 2, FS, F.r, COL.INK);
+      }
+      function drawCol(items, x, w, yy) {
+        items.forEach(function (it, i) {
+          if (it.k === 'h') { if (i > 0) yy += GAP; P.tracked(String(it.label).toUpperCase() + (it.cont ? ' · CONTINUED' : ''), x, yy, 5.8, F.r, COL.MUT, 1.3); yy += GH; return; }
+          rowAt(it.row, x, w, yy); yy += RH;
         });
-        if (sec.total != null) { y += 2; P.hline(x + 12, x + colW, y - 6, COL.GOLD, 0.6, 0.6); P.text(sec.total_label || (sec.title + ' total'), x + 12, y + 1, 8.8, F.b, COL.INK); P.right(money(sec.total), x + colW, y + 1, 8.8, F.b, COL.INK); y += RH + 4; }
-        if (sec.note) { P.text(fit(F.r, sec.note, 7.6, colW - 12), x + 12, y - 1, 7.6, F.r, COL.MUT); y += 12; }
-        P.rect(x, secTop - 4, 3, y - secTop - 4, hex);   // service colour bar (Takeover pattern)
-        y += 14;
+        return yy;
+      }
+      b.sections.forEach(function (sec, si) {
+        var rows = sec.rows || [], hex = lx.hexRgb(hexOf(sec)), secTop = y, nn = '§' + String(si + 1 + (opts.si0 || 0)).padStart(2, '0');
+        if (L.land) {
+          // left: § · title · total · options · note
+          var hx = M + 14, hw = L.headW - 14, yy = y;
+          P.tracked(nn, hx, yy + 1, 7.2, F.r, hex, 2.2);
+          lx.wrap(String(sec.title || ''), F.b, L.TS, hw - 32).slice(0, 2).forEach(function (ln, i) { P.text(ln, hx + 32, yy - 3 + i * (L.TS + 3), L.TS, F.b, COL.INK); });
+          yy += lx.wrap(String(sec.title || ''), F.b, L.TS, hw - 32).slice(0, 2).length * (L.TS + 3) + 4;
+          if (sec.optional) { var lw0 = F.b.widthOfTextAtSize('OPTION', 6.5) + 24; P.rrect(hx + 32, yy - 4, lw0, 13, 2, COL.GOLD, 0.8, 0.9); P.tracked('OPTION', hx + 39, yy, 6.5, F.b, COL.GOLD, 1.4); yy += 16; }
+          if (sec.total != null) { P.text(money(sec.total), hx + 32, yy + 3, 12, F.b, COL.INK); yy += 20; }
+          if (sec.options_inc) { P.text('options ' + signed(sec.options_inc), hx + 32, yy + 1, 7.8, F.r, COL.GOLD); yy += 13; }
+          if (sec.note) lx.wrap(String(sec.note), F.r, 7.8, hw - 32).slice(0, 3).forEach(function (ln) { P.text(ln, hx + 32, yy - 4, 7.8, F.r, COL.MUT); yy += 10.5; });
+          // right: the lines, two balanced columns
+          var rx = M + L.headW + L.gap, rw = W - L.headW - L.gap, cw = (rw - L.gap) / 2, cs = bCols(bItems(rows, L), 2), hR = 0;
+          cs.forEach(function (items, c) { hR = Math.max(hR, drawCol(items, rx + c * (cw + L.gap), cw, y + 1) - y - 1); });
+          var h = Math.max(yy - y, hR);
+          P.rect(M, secTop - 6, 3, h + 4, hex);   // service colour bar (Takeover pattern)
+          y += h + 8; P.hline(M + 14, M + W, y - 2, COL.GOLD, 0.4, 0.45); y += 10;
+        } else {
+          P.tracked(nn, M + 12, y + 1, 7, F.r, hex, 2.2);
+          var tw = sec.total != null ? F.b.widthOfTextAtSize(money(sec.total), 11) + 16 : 0;
+          var t1 = fit(F.b, sec.title, L.TS, W - 42 - tw - (sec.optional ? 60 : 0)); P.text(t1, M + 42, y - 2, L.TS, F.b, COL.INK);
+          if (sec.optional) { var lw1 = F.b.widthOfTextAtSize('OPTION', 6.5) + 24, px1 = M + 42 + F.b.widthOfTextAtSize(t1, L.TS) + 10; P.rrect(px1, y - 3, lw1, 13, 2, COL.GOLD, 0.8, 0.9); P.tracked('OPTION', px1 + 7, y + 1, 6.5, F.b, COL.GOLD, 1.4); }
+          if (sec.total != null) P.right(money(sec.total), M + W, y - 2, 11, F.b, COL.INK);
+          y += 20;
+          y = drawCol(bItems(rows, L), M + 12, W - 12, y);
+          if (sec.note) { P.text(fit(F.r, sec.note, 7.4, W - 12), M + 12, y - 1, 7.4, F.r, COL.MUT); y += 12; }
+          P.rect(M, secTop - 4, 3, y - secTop - 4, hex);
+          y += 4; P.hline(M + 12, M + W, y - 2, COL.GOLD, 0.4, 0.45); y += 12;
+        }
       });
-      if (withBasis) { need(20 + (b.basis || []).length * 14 + (b.flags || []).length * 44); drawBasis(P, F, lx, b, xcol(), y, colW, true); }
+      if (withBasis) drawBasis(P, F, lx, b, M, y + 4, L.land ? W / 2 : W, true);
       lx.pageFoot(P, F);
     };
   }
@@ -342,7 +470,7 @@
     var pages = [];
     if (has('overview')) pages.push(pageOverview(m, b, DOC));
     if (has('products') && (m.products || []).length) { var per = land ? 8 : 4; for (var k = 0; k < m.products.length; k += per) pages.push(pageProducts(m, m.products.slice(k, k + per), DOC, prodImgs, k > 0)); }
-    if (has('budget') && b && b.sections.length) budgetPages(b, { doc: DOC, basis: !has('basis') }).forEach(function (pg) { pages.push(pg); });
+    if (has('budget') && b && b.sections.length) budgetPages(b, { doc: DOC, basis: !has('basis'), F: F }).forEach(function (pg) { pages.push(pg); });
     if (has('basis')) pages.push(pageBasis(m, b, DOC));
     var withCover = has('cover'), TOTAL = pages.length + (withCover ? 1 : 0) + (has('rear') ? 1 : 0);
     if (withCover) {
@@ -411,7 +539,7 @@
   }
 
   var API = { VERSION: VERSION, VAT: VAT, r10: r10, money: money, signed: signed, clientLabel: clientLabel, rowInc: rowInc, rowLabel: rowLabel, hexOf: hexOf,
-    budget: budget, totals: totals, evalQty: evalQty, priceOf: priceOf, fromTemplate: fromTemplate, fromTakeoff: fromTakeoff, takeoffCounts: takeoffCounts, pickLinked: pickLinked, inputsFromSummaries: inputsFromSummaries, defaultsOf: defaultsOf, derive: derive, record: record, wqPlan: wqPlan, products: products,
+    budget: budget, totals: totals, evalQty: evalQty, priceOf: priceOf, fromTemplate: fromTemplate, fromTakeoff: fromTakeoff, gardenRows: gardenRows, takeoffCounts: takeoffCounts, pickLinked: pickLinked, inputsFromSummaries: inputsFromSummaries, SOURCES: SOURCES, readsOf: readsOf, sourceAt: sourceAt, sourceLabel: sourceLabel, sourceStamps: sourceStamps, staleSources: staleSources, logEntry: logEntry, summaryEntry: summaryEntry, mergeSummary: mergeSummary, defaultsOf: defaultsOf, derive: derive, record: record, wqPlan: wqPlan, products: products,
     pdf: { budgetPage: budgetPage, budgetPages: budgetPages, generate: generate, cards: cards, basis: drawBasis } };
   global.SonorEstimate = API;
   if (typeof module !== 'undefined' && module.exports) module.exports = API;

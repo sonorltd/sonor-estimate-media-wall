@@ -3,7 +3,7 @@
    The SAME JSON is seeded into Supabase `estimate_templates` (template column) — the table wins when it loads; this file is
    the offline tier and the seed source. Edit here, re-seed (sonor-master/supabase/estimates-*.sql), sync.
 
-   template = { kind, title (document name), cover (covers.json key), progress[] (design apps it hands off to),
+   template = { kind, title (document name), cover (covers.json key), progress[] (design apps it hands off to; param 'project' adds &project=<uuid> for apps that read it as the project id — Garden Lighting / Stretched Fabric / Seating read ?project= as a title, so they get ?pid= only),
                 inputs[{key,label,unit,default,step,min,max,kind:'num'|'bool'}],
                 defaults{margin, labourSell, labourCost, contingency},
                 sections[{key, service_nn | hex, title, note, optional, when, labour_label,
@@ -22,8 +22,8 @@
 
   // ── CINEMA ESTIMATE ────────────────────────────────────────────────────────────────────────────────
   T.cinema = {
-    kind: 'cinema', title: 'Cinema estimate', cover: 'cinema', app: 'estimate-cinema', version: '1.0.0',
-    progress: [{ app: 'takeoffs', label: 'Takeoffs', param: 'project' }, { app: 'cinemaDesign', label: 'Cinema Design', param: 'project' }, { app: 'stretchedFabric', label: 'Stretched Fabric', param: 'project' }, { app: 'ledCalc', label: 'LED Calc', param: 'project' }, { app: 'seating', label: 'Seating', param: 'project' }, { app: 'estimate-whole-home', label: 'Whole House Estimate', param: 'project' }],
+    kind: 'cinema', title: 'Cinema estimate', cover: 'cinema', app: 'estimate-cinema', version: '1.1.0',
+    progress: [{ app: 'takeoffs', label: 'Takeoffs', param: 'project' }, { app: 'cinemaDesign', label: 'Cinema Design', param: 'project' }, { app: 'stretchedFabric', label: 'Stretched Fabric', param: 'pid' }, { app: 'ledCalc', label: 'LED Calc', param: 'project' }, { app: 'seating', label: 'Seating', param: 'pid' }, { app: 'estimate-whole-home', label: 'Whole House Estimate', param: 'project' }],
     inputs: [
       { key: 'w_mm', label: 'Room width', unit: 'mm', default: 5000, step: 50 },
       { key: 'd_mm', label: 'Room depth', unit: 'mm', default: 6000, step: 50 },
@@ -176,8 +176,7 @@
     overview: { points: ['A preliminary budget to plan with — the design and a measured quotation follow.'] }
   };
 
-  // ── the pattern for the next kinds (title + cover + progress only until their sections are agreed) ──
-  T['garden-lighting'] = { kind: 'garden-lighting', title: 'Garden lighting estimate', cover: 'garden', app: 'estimate-garden-lighting', version: '0.0.0', draft: true, progress: [{ app: 'gardenLighting', label: 'Garden Lighting', param: 'project' }], inputs: [{ key: 'fittings', label: 'Fittings', default: 12 }, { key: 'zones', label: 'Zones', default: 3 }], sections: [] };
+  // (2026-11-09: no separate garden estimate — APP - Garden Lighting is the garden tool; the Whole House reads its published design)
   // ── WHOLE HOUSE ESTIMATE (1.1.0, 2026-11-09 — Bryn: "a whole house estimate for all services … linked with takeoffs and other apps so it
   //    all syncs, essentially these are a front end export for what i held in the project via other apps") ──
   // Sections are READ from Takeoffs (projects.metadata.takeoff_summary — one row per symbol code, counted), priced per point at the
@@ -185,8 +184,8 @@
   // takeoff points of that service with that estimate's section totals. Nothing is typed: re-read after Takeoffs changes.
   // RATES = BUDGET RATES PER POINT ex VAT (product + cable + termination), first pass 2026-11-09 — Sonor to review against WeQuote.
   T['whole-home'] = {
-    kind: 'whole-home', title: 'Whole house estimate', cover: 'scope', app: 'estimate-whole-home', version: '1.0.0', source: 'takeoff',
-    progress: [{ app: 'takeoffs', label: 'Takeoffs', param: 'project' }, { app: 'cinemaDesign', label: 'Cinema Design', param: 'project' }, { app: 'estimate-cinema', label: 'Cinema Estimate', param: 'project' }, { app: 'ledCalc', label: 'LED Calc', param: 'project' }, { app: 'gardenLighting', label: 'Garden Lighting', param: 'project' }],
+    kind: 'whole-home', title: 'Whole house estimate', cover: 'scope', app: 'estimate-whole-home', version: '1.1.0', source: 'takeoff',
+    progress: [{ app: 'takeoffs', label: 'Takeoffs', param: 'project' }, { app: 'cinemaDesign', label: 'Cinema Design', param: 'project' }, { app: 'estimate-cinema', label: 'Cinema Estimate', param: 'project' }, { app: 'ledCalc', label: 'LED Calc', param: 'project' }, { app: 'gardenLighting', label: 'Garden Lighting', param: 'pid' }],
     inputs: [
       { key: 'rooms', label: 'Rooms (from Takeoffs)', default: null, readonly: true },
       { key: 'floors', label: 'Floors (from Takeoffs)', default: null, readonly: true }
@@ -195,15 +194,15 @@
     takeoff: {
       services: {
         '01': { title: 'Cinema room', per_point: 300, labour_h: 1.5, replaced_by: 'cinema', linked_title: 'Cinema room' },
-        '02': { title: 'Multi-room audio', per_point: 250, labour_h: 1.0 },
-        '03': { title: 'Video distribution and TVs', per_point: 200, labour_h: 1.5 },
-        '04': { title: 'Lighting and lighting control', per_point: 120, labour_h: 0.75 },
-        '05': { title: 'Shading and automation', per_point: 250, labour_h: 1.5 },
-        '06': { title: 'Heating controls', per_point: 150, labour_h: 1.0 },
-        '07': { title: 'Control system', per_point: 400, labour_h: 2.0 },
-        '08': { title: 'Security, CCTV and access', per_point: 200, labour_h: 1.25 },
-        '09': { title: 'Network and Wi-Fi', per_point: 200, labour_h: 0.75 },
-        '10': { title: 'Infrastructure and racks', per_point: 150, labour_h: 1.0 },
+        '02': { title: 'Multi-room audio', per_point: 250, labour_h: 1.0, groups: [{ label: 'Speakers', re: 'SPKR|SUB' }, { label: 'Amplifiers and sources', default: true }] },
+        '03': { title: 'Video distribution and TVs', per_point: 200, labour_h: 1.5, groups: [{ label: 'TV supply and install', re: '^MNT-|TVPOINT|^TV' }, { label: 'Video distribution', default: true }] },
+        '04': { title: 'Lighting and lighting control', per_point: 120, labour_h: 0.75, groups: [{ label: 'Lighting control', re: '^KP-|^LPNL|PIR|DMX-CL' }, { label: 'Lighting fixtures', default: true }, { label: 'LED', re: 'LED|^led_m$|DMX-DRV' }, { label: 'Garden lighting', re: '^garden:|^27-' }] },
+        '05': { title: 'Shading and automation', per_point: 250, labour_h: 1.5, groups: [{ label: 'Shading', re: '^SHPNL|SHADE|BLIND|CURT' }, { label: 'Automation and sensors', default: true }] },
+        '06': { title: 'Heating controls', per_point: 150, labour_h: 1.0, groups: [{ label: 'Thermostats and timeclocks', re: 'STAT|TC-' }, { label: 'Hubs and wiring centres', default: true }] },
+        '07': { title: 'Control system', per_point: 400, labour_h: 2.0, groups: [{ label: 'Processor', re: 'PROC' }, { label: 'Touch panels and remotes', default: true }] },
+        '08': { title: 'Security, CCTV and access', per_point: 200, labour_h: 1.25, groups: [{ label: 'CCTV', re: 'CAM|NVR' }, { label: 'Intercom and gates', re: 'ANSWER|GATE|DBELL|INTC' }, { label: 'Alarm', default: true }] },
+        '09': { title: 'Network and Wi-Fi', per_point: 200, labour_h: 0.75, groups: [{ label: 'Wi-Fi', re: 'AP-|^WAP' }, { label: 'Wired network', default: true }] },
+        '10': { title: 'Infrastructure and racks', per_point: 150, labour_h: 1.0, groups: [{ label: 'Racks and power', default: true }, { label: 'Aerial and satellite', re: 'AERIAL|IRS|SAT' }] },
         '11': { title: 'Electrical', exclude: true }
       },
       rates: {
@@ -247,6 +246,15 @@
         { re: '^20-DL-', label: 'Downlight', sell_ex: 65, labour_h: 0.5 }, { re: '^23-', label: 'Wall light', sell_ex: 140 }, { re: '^27-', label: 'Exterior light', sell_ex: 160, labour_h: 1 }
       ],
       led_m: { label: 'LED strip, drivers and fitting', sell_ex: 45, labour_h: 0.25 },
+      // the garden comes from APP - Garden Lighting's published design when there is one (it replaces the plan's 27- exterior points);
+      // first-pass budget rates per fitting ex VAT incl. cable termination — Sonor to review with the garden catalogue's WeQuote prices
+      garden: { nn: '04', replaces: '^27-', group: 'Garden lighting',
+        kinds: { spike: { label: 'Spike light', sell_ex: 165, labour_h: 0.75 }, flood: { label: 'Flood light', sell_ex: 220, labour_h: 1 }, bollard: { label: 'Bollard light', sell_ex: 320, labour_h: 1.5 },
+          wall: { label: 'Exterior wall light', sell_ex: 180, labour_h: 1 }, step: { label: 'Step light', sell_ex: 120, labour_h: 0.75 }, ground: { label: 'In-ground light', sell_ex: 260, labour_h: 1.25 },
+          uplight: { label: 'Uplight', sell_ex: 150, labour_h: 0.75 }, feature: { label: 'Water feature light', sell_ex: 280, labour_h: 1 } },
+        default: { sell_ex: 180, labour_h: 1 },
+        driver: { label: 'Exterior LED driver (IP67)', sell_ex: 95, labour_h: 0.5 }, switch: { label: 'Switching per zone', sell_ex: 65, labour_h: 0.5 }, pir: { label: 'Garden PIR sensor', sell_ex: 120, labour_h: 0.5 },
+        strip_m: { label: 'Exterior LED strip', sell_ex: 55, labour_h: 0.3 }, cable_m: { label: 'Exterior cable, ducting and joints', sell_ex: 12, labour_h: 0.1 } },
       programming: { nn: '07', h_per_point: 0.1, label: 'Programming and commissioning — whole house' }
     },
     basis: ['Points and quantities from the Takeoffs plan of the house; final figures follow the survey and design.', 'Budget rates per point include the product, cable and termination at a standard specification.', 'Rooms with their own estimate (for example the cinema) carry that estimate\'s figures.', 'Includes VAT at 20%; excludes building work, decoration and anything not described.'],

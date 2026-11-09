@@ -28,6 +28,8 @@
 //
 // Namespace: window.SonorProjectBar
 //
+// Version: 1.16.0 — 🧮 ESTIMATE PILLS (2026-11-09, B-809): one pill per estimate on the project (from
+//                  metadata.estimates_summary.by_kind) opening that Estimate app on this project + revision. Additive.
 // Version: 1.15.0 — NO NEW PROJECTS FROM APP BARS (2026-10-31, Bryn: "remove new project creation buttons from all apps
 //                  because they are always created from here anyway"): + New is now OPT-IN (`showNew: true`); no app passes it.
 //                  Projects are created only in the Master Hub (Database → Master Projects, + New Project) and by the
@@ -150,6 +152,22 @@
   function _blueprintLink(active) {
     if (!active) return '';
     return `<a class="brief-link" href="${BLUEPRINT_URL}?pid=${encodeURIComponent(active.id)}" target="_blank" rel="noopener" title="Project blueprint — every surface from every app, opens in a new tab">🧭 Blueprint</a>`;
+  }
+
+  // v1.16.0 — ESTIMATES (B-809, 2026-11-09, Bryn: "make sure they all wire through with the related project data and links
+  // with the other apps"). Every estimate save mirrors projects.metadata.estimates_summary.by_kind; the bar shows one
+  // neutral pill per estimate on the project (kind · latest rev) that opens that Estimate app on this project + revision.
+  // Nothing shown when the project has no estimates. Same brief-link pattern, no new styles.
+  const ESTIMATE_URL = 'https://apps.sonor.co.uk/sonor-estimate-';
+  const ESTIMATE_NAMES = { cinema: 'Cinema', 'media-wall': 'Media Wall', 'media-room': 'Media Room', 'whole-home': 'Whole House' };
+  function _estimatesLink(active) {
+    const es = active && active.metadata && active.metadata.estimates_summary && active.metadata.estimates_summary.by_kind;
+    if (!es) return '';
+    return Object.keys(es).filter(function (k) { return ESTIMATE_NAMES[k]; }).slice(0, 4).map(function (k) {
+      const e = es[k] || {}, nm = ESTIMATE_NAMES[k];
+      const href = ESTIMATE_URL + k + '/?project=' + encodeURIComponent(active.id) + (e.id ? '&estimate=' + encodeURIComponent(e.id) : '');
+      return `<a class="brief-link" href="${href}" target="_blank" rel="noopener" title="${_esc(nm)} estimate R${_esc(e.rev || 1)} · ${_esc(e.status || 'draft')} — opens in a new tab">🧮 ${_esc(nm)} R${_esc(e.rev || 1)}</a>`;
+    }).join('');
   }
 
   // ---- Internal state ----
@@ -338,7 +356,7 @@
             <span class="meta">
               ${active.client_name ? `<span class="meta-cell"><span class="k">CLIENT</span><span>${_esc(active.client_name)}</span></span>` : ''}
               ${status ? `<span class="status-pill" style="background:${statusCol}33;border:1px solid ${statusCol};color:#F4F1EC">${_esc(status)}</span>` : ''}
-              ${_blueprintLink(active)}${_briefLink(active)}${_tradesLink(active)}
+              ${_blueprintLink(active)}${_briefLink(active)}${_tradesLink(active)}${_estimatesLink(active)}
             </span>
           ` : '<span class="note">No project selected in the host app yet.</span>'}
         </div>
@@ -356,7 +374,7 @@
             ${active.client_name ? `<span class="meta-cell"><span class="k">CLIENT</span><span>${_esc(active.client_name)}</span></span>` : ''}
             ${active.address ? `<span class="meta-cell"><span class="k">ADDR</span><span>${_esc(active.address)}</span></span>` : ''}
             ${status ? `<span class="status-pill" style="background:${statusCol}33;border:1px solid ${statusCol};color:#F4F1EC">${_esc(status)}</span>` : ''}
-            ${_blueprintLink(active)}${_briefLink(active)}${_tradesLink(active)}
+            ${_blueprintLink(active)}${_briefLink(active)}${_tradesLink(active)}${_estimatesLink(active)}
           </span>
         ` : '<span class="note">No project selected — pick one above to load it into this app.</span>'}
         <span class="actions">
@@ -745,7 +763,7 @@
   const api = {
     init, refresh, loadProjects,
     getActiveId, getProject, getProjects, setActive, rerender,
-    __version: '1.14.0',
+    __version: '1.16.0',
     __ls_key: LS_KEY
   };
   if (typeof window !== 'undefined') window.SonorProjectBar = api;
