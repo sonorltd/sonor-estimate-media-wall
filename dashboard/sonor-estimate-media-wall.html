@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="graphite">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Media Wall Estimate — Sonor</title>
+<link rel="icon" href="../data/favicon.svg" type="image/svg+xml">
+<!-- Spine v1.3 import order (§2 / S-4.1.a): theme FIRST, brand.css, served kit, shared chrome, then the app layer. Synced copies — masters at workspace root. -->
+<script src="../data/sonor-theme.js"></script>
+<link rel="stylesheet" href="../data/brand.css">
+<script type="module" src="https://apps.sonor.co.uk/sonor-kit/v1/kit.js" onerror="import('./../data/kit/kit.js')"></script>
+<link rel="stylesheet" href="../data/sonor-header.css">
+<link rel="stylesheet" href="../data/sonor-components.css">
+<link rel="stylesheet" href="../data/app-vars.css">
+<link rel="stylesheet" href="../data/sonor-shell.css">
+<link rel="stylesheet" href="../data/sonor-estimate-app.css">   <!-- root master — ONE estimate UI layout (B-809) -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=DM+Mono:wght@400&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4" integrity="sha384-GFr3yTh5lJznCbZfpTtXnwboFsxqtTQoeTZCRHhE0579KrRmlCzen5AA8ohaB5ug" crossorigin="anonymous"></script>
+<script src="../sonor-db.js"></script>
+<script src="../data/sonor-brand.js"></script>
+<script src="../data/sonor-app.js"></script>
+<script src="../data/sonor-header.js"></script>
+<script src="../data/sonor-palette.js"></script>
+<script src="../data/sonor-shell.js"></script>
+<script src="../data/sonor-project-list.js"></script>
+<script src="../data/sonor-project-bus.js"></script>
+<script src="../data/sonor-project-bar.js"></script>
+<script src="../data/sonor-sortable.js"></script>
+<script src="../data/sonor-wq-push.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"></script>
+<script src="../data/sonor-pdf-theme.js"></script>   <!-- ONE PDF palette — before every PDF pipeline (§41) -->
+<script src="../data/sonor-pdf-luxury.js"></script>
+<script src="../data/sonor-estimate.js"></script>             <!-- root master — the ONE estimate engine + budget page (B-809) -->
+<script src="../data/sonor-estimate-templates.js"></script>   <!-- root master — offline tier of estimate_templates -->
+<script src="../data/estimate-media-wall-config.js"></script>
+<script src="../data/sonor-estimate-app.js"></script>         <!-- root master — the ONE estimate app UI -->
+</head>
+<body>
+<header class="header" id="sonor-header"></header>
+<div id="projectBarHost"></div>
+<div class="est-main">
+  <!-- S-4.14 tab bar — actions rail LAST -->
+  <div class="tab-bar">
+    <button class="tab-btn active" data-tab="estimate">Media wall estimate</button>
+    <div class="nav-actions" id="estActions"></div>
+  </div>
+  <main id="estMain"></main>
+</div>
+<script>
+// VERSION — single source of truth in code (site 1 of 5, S-4.3)
+const APP_VERSION = '0.1.0';
+window.__ESTIMATE_APP__ = { kind: 'media-wall', appKey: 'estimate-media-wall', version: APP_VERSION };
+(function boot() {
+  const shell = SonorShell.mount({
+    appKey: 'estimate-media-wall', appName: 'Media Wall Estimate', repo: 'sonor-estimate-media-wall',
+    version: APP_VERSION, faviconHref: '../data/favicon.svg', assetBase: '../data/',
+    supabase: true,
+    requires: ['SonorProjectList', 'SonorProjectBar', 'SonorEstimate', 'EstimateApp', 'SonorPdfLuxury'],
+    palette: {
+      self: 'estimate-media-wall',
+      providers: [() => [
+        { id: 'cmd:save', label: 'Save estimate', hotkey: 'S', run: () => EstimateApp.save() },
+        { id: 'cmd:pdf', label: 'Export PDF…', hotkey: 'E', run: () => EstimateApp.exportDialog() },
+        { id: 'cmd:issue', label: 'Issue this revision', run: () => EstimateApp.issue() }
+      ]]
+    }
+  });
+  EstimateApp.boot(shell.ready);
+})();
+</script>
+</body>
+</html>

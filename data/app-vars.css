@@ -1,0 +1,9 @@
+/* ESTIMATE - Media Wall — app-vars.css
+   Thin aliasing layer. Generic tokens from brand.css → app vocabulary.
+   NO raw hex. NO :root palette. Per Spine S-4.1 + S-4.2. */
+
+:root {
+  /* Example aliases — edit for this app's semantics */
+  --estimate-media-wall-surface: var(--surface-card);
+  --estimate-media-wall-accent:  var(--purple);
+}
