@@ -16,7 +16,7 @@
 */
 (function (global) {
   'use strict';
-  var VERSION = '1.2.0';   // 1.2.0: garden design into Whole House, ?pid= + ?estimate= deep links. 1.1.0: source freshness + history + the project mirror (estimates_summary), sub-group rows
+  var VERSION = '1.3.0';   // 1.3.0: a published design budget (template.designBudget) seeds the sections — 1410 Media Room from Stretched Fabric.   // 1.2.0: garden design into Whole House, ?pid= + ?estimate= deep links. 1.1.0: source freshness + history + the project mirror (estimates_summary), sub-group rows
   var E = global.SonorEstimate;
   var A = global.__ESTIMATE_APP__ || {};
   var S = { db: null, ready: false, projects: [], project: null, list: [], cur: null, dirty: false, tpl: null, lib: {}, libLoaded: false, collapsed: {} };
@@ -54,7 +54,12 @@
     ]);
     if (r[0].error) toast(r[0].error.message, 'error');
     S.projects = r[0].data || [];
-    if (r[1] && r[1].data && r[1].data.template && ((r[1].data.template.sections || []).length || r[1].data.template.takeoff)) S.tpl = r[1].data.template;   // the table wins; the synced JSON is the offline tier
+    // 1.2.0 — the NEWER template wins: the table copy (estimate_templates) is used only when its version is at least the built-in one,
+    // so a pushed template is live at once and the table can never hold an app back on an older method. Offline → the built-in copy.
+    var bt = (global.__SONOR_ESTIMATE_TEMPLATES__ || {})[A.kind], dt = r[1] && r[1].data && r[1].data.template;
+    var vcmp = function (a, b) { a = String(a || '0').split('.').map(Number); b = String(b || '0').split('.').map(Number); for (var i = 0; i < 3; i++) { if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) - (b[i] || 0); } return 0; };
+    if (dt && ((dt.sections || []).length || dt.takeoff) && (!bt || vcmp(dt.version || r[1].data.version, bt.version) >= 0)) S.tpl = dt;
+    S.tplSrc = S.tpl ? 'table' : (dt ? 'built-in, newer than the table' : 'offline copy');
     var qs = new URLSearchParams(location.search), want = qs.get('project') || qs.get('pid') || (location.hash.match(/project=([0-9a-f-]{36})/) || [])[1];
     var PB = global.SonorProjectBar;
     if (PB && PB.init) {
@@ -117,6 +122,10 @@
   }
   // sections for a new / reseeded estimate: Takeoffs (whole house) or the template + inputs (one room)
   async function seedSections(t, inputs) {
+    // 1.3.0 — a design app that publishes a client budget (template.designBudget: ['stretched_fabric_spec', …]) seeds the sections; the
+    // template + inputs is the fallback when no design has been priced yet
+    var md0 = (S.project && S.project.metadata) || {}, dk = (t.designBudget || []).find(function (k) { return md0[k] && md0[k].budget && (md0[k].budget.sections || []).length; });
+    if (dk && E.fromDesignBudget) { toast('Sections taken from the ' + E.sourceLabel(dk) + ' design', 'info'); return E.fromDesignBudget(md0[dk].budget); }
     if (t.source !== 'takeoff') return E.fromTemplate(t, inputs, lib);
     var md = (S.project && S.project.metadata) || {}, ts = md.takeoff_summary;
     if (!ts || !(ts.places || []).length) { toast('No Takeoffs plan on this project yet — draw the points in Takeoffs, then re-read', 'warn'); return []; }
@@ -211,7 +220,7 @@
     var ro = !editable(), h = '';
     h += '<div class="est-grid"><div class="est-left">';
     // inputs
-    h += '<div class="card est-inputs"><div class="card-header est-ptt">Inputs <span class="muted">· ' + esc(t.title || '') + ' template' + (S.tpl ? '' : ' (offline copy)') + '</span>' + (ro ? '' : (t.source === 'takeoff' ? '<button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="EstimateApp.reseed()" title="Read the points from Takeoffs and the project\'s room estimates again">↻ Re-read from Takeoffs</button>' : '<button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="EstimateApp.reseed()" title="Rebuild the sections from the template and these inputs">↻ Reseed sections</button>')) + '</div>' + staleHtml() + '<div class="est-in-grid">';
+    h += '<div class="card est-inputs"><div class="card-header est-ptt">Inputs <span class="muted">· ' + esc(t.title || '') + ' template ' + esc(t.version || '') + (S.tpl ? '' : ' (' + esc(S.tplSrc || 'offline copy') + ')') + '</span>' + (ro ? '' : (t.source === 'takeoff' ? '<button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="EstimateApp.reseed()" title="Read the points from Takeoffs and the project\'s room estimates again">↻ Re-read from Takeoffs</button>' : '<button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="EstimateApp.reseed()" title="Rebuild the sections from the template and these inputs">↻ Reseed sections</button>')) + '</div>' + staleHtml() + '<div class="est-in-grid">';
     (t.inputs || []).forEach(function (i) { var v = c.inputs[i.key]; h += '<label class="est-in"><span class="field-label">' + esc(i.label) + (i.unit ? ' <em>' + esc(i.unit) + '</em>' : '') + '</span><input class="input mono" type="number" ' + (i.step ? 'step="' + i.step + '" ' : '') + (i.min != null ? 'min="' + i.min + '" ' : '') + (i.max != null ? 'max="' + i.max + '" ' : '') + 'value="' + esc(v == null ? '' : v) + '"' + (ro || i.readonly ? ' disabled' : '') + ' onchange="EstimateApp.setInput(\'' + i.key + '\',this.value)"></label>'; });
     h += '<label class="est-in"><span class="field-label">Contingency <em>%</em></span><input class="input mono" type="number" step="1" min="0" value="' + Math.round(num((c.metadata || {}).contingency, 0) * 100) + '"' + (ro ? ' disabled' : '') + ' onchange="EstimateApp.setMeta(\'contingency\',this.value)"></label>';
     h += '<label class="est-in est-in-wide"><span class="field-label">Document name</span><input class="input" value="' + esc(c.label || t.title) + '"' + (ro ? ' disabled' : '') + ' onchange="EstimateApp.setLabel(this.value)"></label>';

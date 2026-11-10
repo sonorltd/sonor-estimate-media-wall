@@ -82,7 +82,7 @@
 
   // ── MEDIA WALL ESTIMATE (ENQ-MW01 R4 pattern: build · finishes · lighting · electrical · fire · AV · making good, + 10 % contingency) ──
   T['media-wall'] = {
-    kind: 'media-wall', title: 'Media wall estimate', cover: 'contract', app: 'estimate-media-wall', version: '1.0.0',
+    kind: 'media-wall', title: 'Media wall estimate', cover: 'contract', app: 'estimate-media-wall', version: '1.1.0',
     progress: [{ app: 'takeoffs', label: 'Takeoffs', param: 'project' }, { app: 'mediaWall', label: 'Media Wall', param: 'project' }, { app: 'ledCalc', label: 'LED Calc', param: 'project' }, { app: 'estimate-whole-home', label: 'Whole House Estimate', param: 'project' }],
     inputs: [
       { key: 'w_mm', label: 'Wall width', unit: 'mm', default: 4500, step: 10 },
@@ -132,7 +132,7 @@
 
   // ── MEDIA ROOM ESTIMATE (the cinema pattern without the dedicated room: TV, sound, lighting, control) ──
   T['media-room'] = {
-    kind: 'media-room', title: 'Media room estimate', cover: 'cinema', app: 'estimate-media-room', version: '1.0.0',
+    kind: 'media-room', title: 'Media room estimate', cover: 'cinema', app: 'estimate-media-room', version: '1.1.0',
     progress: [{ app: 'takeoffs', label: 'Takeoffs', param: 'project' }, { app: 'cinemaDesign', label: 'Cinema Design', param: 'project' }, { app: 'mediaWall', label: 'Media Wall', param: 'project' }, { app: 'ledCalc', label: 'LED Calc', param: 'project' }, { app: 'estimate-whole-home', label: 'Whole House Estimate', param: 'project' }],
     inputs: [
       { key: 'w_mm', label: 'Room width', unit: 'mm', default: 4500, step: 50 },

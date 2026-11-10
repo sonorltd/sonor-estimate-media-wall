@@ -28,7 +28,7 @@
 */
 (function (global) {
   'use strict';
-  var VERSION = '1.3.0';
+  var VERSION = '1.4.0';   // 1.4.0 — rows can be `existing` (shown "retained", never priced) — Bryn 2026-11-09, 1410
   var VAT = 0.2;
 
   function num(v, d) { var n = Number(v); return isFinite(n) ? n : (d == null ? 0 : d); }
@@ -62,10 +62,10 @@
       if (!sx || sx.hidden) return;
       var secOpt = !!sx.optional, tot = 0, optTot = 0;
       var rows = (sx.rows || []).filter(function (r) { return r && !r.hidden && (r.label || r.inc || r.sell_ex); }).map(function (r) {
-        var inc = rowInc(r, o), opt = secOpt || !!r.optional;
-        return { label: rowLabel(r), inc: inc, optional: opt, allowance: !!r.allowance, model_id: r.model_id || null, group: r.group || null };
+        var ex = !!r.existing, inc = ex ? 0 : rowInc(r, o), opt = !ex && (secOpt || !!r.optional);
+        return { label: rowLabel(r), inc: inc, optional: opt, allowance: !ex && !!r.allowance, existing: ex, model_id: r.model_id || null, group: r.group || null };
       });
-      if (sx.sortOptionsLast !== false) rows.sort(function (a, b) { return (a.optional ? 1 : 0) - (b.optional ? 1 : 0); });   // core rows first, options after
+      if (sx.sortOptionsLast !== false) rows.sort(function (a, b) { return (a.existing ? 1 : 0) - (b.existing ? 1 : 0) || (a.optional ? 1 : 0) - (b.optional ? 1 : 0); });   // core rows first, existing (retained) next, options after
       rows.forEach(function (r) { if (r.optional) { optionsInc += r.inc; optTot += r.inc; } else { tot += r.inc; core += r.inc; if (r.allowance) allowanceInc += r.inc; } });
       if (!rows.length) return;
       sections.push({ key: sx.key, service_nn: sx.service_nn || null, hex: sx.hex || null, title: clientLabel(sx.title), optional: secOpt, note: sx.note || null,
@@ -80,7 +80,7 @@
   }
   function totals(est, opts) {
     var b = budget(est, opts), o = { vat: VAT, contingency: num((est || {}).contingency, 0) }, coreEx = 0, secs = {};
-    (est.sections || []).forEach(function (sx) { (sx.rows || []).forEach(function (r) { if (!(sx.optional || r.optional) && !r.hidden) coreEx += r.sell_ex != null ? num(r.sell_ex) : rowInc(r, o) / (1 + VAT); }); });
+    (est.sections || []).forEach(function (sx) { (sx.rows || []).forEach(function (r) { if (!(sx.optional || r.optional) && !r.hidden && !r.existing) coreEx += r.sell_ex != null ? num(r.sell_ex) : rowInc(r, o) / (1 + VAT); }); });
     b.sections.forEach(function (s) { secs[s.key] = { total_inc: s.total, options_inc: s.options_inc }; });
     return { core_ex: Math.round(coreEx * 100) / 100, core_inc: b.core_inc, options_inc: b.options_inc, allowance_inc: b.allowance_inc, with_options_inc: b.with_options_inc, sections: secs };
   }
@@ -131,6 +131,15 @@
       if (hours > 0 && ts.labour !== false) rows.push({ label: ts.labour_label || 'Installation and commissioning', qty: 1, sell_ex: Math.round(hours * d.labourSell * 100) / 100, labour_h: Math.round(hours * 10) / 10, labour: true });
       return { key: ts.key, service_nn: ts.service_nn || null, hex: ts.hex || null, title: ts.title, optional: !!ts.optional, note: ts.note || null, rows: rows };
     }).filter(function (s) { return s && s.rows.length; });
+  }
+  // fromDesignBudget(budget) — 1.4.0: a design app's published client budget (e.g. projects.metadata.stretched_fabric_spec.budget, the
+  // §70 section model) taken as this estimate's sections, so a room estimate fronts the design instead of re-entering it (Bryn 2026-11-09,
+  // 1410: "is this fully done as the correct project under media room estimate app … as well as its potentially other apps that share info")
+  function fromDesignBudget(b) {
+    return ((b && b.sections) || []).map(function (sx) {
+      return { key: sx.key, service_nn: sx.service_nn || null, hex: sx.hex || null, title: sx.title, optional: !!sx.optional, note: sx.note || null, total_label: sx.total_label || null, from_design: true,
+        rows: (sx.rows || []).map(function (r) { var o = { label: r.label, inc: r.existing ? 0 : num(r.inc), sell_ex: r.existing ? 0 : Math.round(num(r.inc) / (1 + VAT) * 100) / 100 }; ['optional', 'allowance', 'existing'].forEach(function (k) { if (r[k]) o[k] = true; }); if (r.model_id) o.model_id = r.model_id; return o; }) };
+    }).filter(function (s) { return s.rows.length; });
   }
   // ── Takeoffs → sections (1.1.0, Bryn 2026-11-09: "these are a front end export for what i held in the project via other apps") ──
   // Takeoffs is the device SSOT: projects.metadata.takeoff_summary.places[kind:'symbol'] {code, label, service_nn, floor_name}.
@@ -292,7 +301,7 @@
         ln.product_id = Number(pid); ln.name = label; ln.basis = label; totals.wqLines++; totals.mapped++; lines.push(ln);
       }
       (s.rows || []).forEach(function (r) {
-        if (r.hidden) return; var sell = r.sell_ex != null ? num(r.sell_ex) : rowInc(r) / (1 + VAT);
+        if (r.hidden || r.existing) return; var sell = r.sell_ex != null ? num(r.sell_ex) : rowInc(r) / (1 + VAT);
         if (s.optional || r.optional) { add('OPTIONAL — ' + rowLabel(r) + ' · per estimate', sell, r.cost_ex != null ? num(r.cost_ex) : null, true); return; }
         core += sell; if (r.cost_ex != null) cost += num(r.cost_ex); else hasCost = false;
       });
@@ -394,11 +403,11 @@
       if (!opts.cont) cards(P, F, lx, opts.totals || b, M, y0, W);
       var y = y0 + (opts.cont ? 10 : 78), RH = L.RH, FS = L.FS, withBasis = opts.basis !== false;
       function rowAt(r, x, w, yy) {
-        var tg = [r.optional ? 'OPTION' : null, r.allowance ? 'ALLOWANCE' : null].filter(Boolean).join(' · '), tgW = tg ? F.r.widthOfTextAtSize(tg, 5.8) + 14 : 0;
+        var tg = [r.existing ? 'EXISTING' : null, r.optional ? 'OPTION' : null, r.allowance ? 'ALLOWANCE' : null].filter(Boolean).join(' · '), tgW = tg ? F.r.widthOfTextAtSize(tg, 5.8) + 14 : 0;
         var lab = fit(F.r, r.label, FS, w - 78 - tgW);
         P.text(lab, x, yy - 2, FS, F.r, COL.INK2);
         if (tg) P.tracked(tg, x + F.r.widthOfTextAtSize(lab, FS) + 6, yy + 1, 5.8, F.r, r.optional ? COL.GOLD : COL.MUT, 1.2);
-        P.right(r.optional ? signed(r.inc) : money(r.inc), x + w, yy - 2, FS, F.r, COL.INK);
+        if (r.existing) P.right('retained', x + w, yy - 2, FS, F.r, COL.MUT); else P.right(r.optional ? signed(r.inc) : money(r.inc), x + w, yy - 2, FS, F.r, COL.INK);
       }
       function drawCol(items, x, w, yy) {
         items.forEach(function (it, i) {
@@ -539,7 +548,7 @@
   }
 
   var API = { VERSION: VERSION, VAT: VAT, r10: r10, money: money, signed: signed, clientLabel: clientLabel, rowInc: rowInc, rowLabel: rowLabel, hexOf: hexOf,
-    budget: budget, totals: totals, evalQty: evalQty, priceOf: priceOf, fromTemplate: fromTemplate, fromTakeoff: fromTakeoff, gardenRows: gardenRows, takeoffCounts: takeoffCounts, pickLinked: pickLinked, inputsFromSummaries: inputsFromSummaries, SOURCES: SOURCES, readsOf: readsOf, sourceAt: sourceAt, sourceLabel: sourceLabel, sourceStamps: sourceStamps, staleSources: staleSources, logEntry: logEntry, summaryEntry: summaryEntry, mergeSummary: mergeSummary, defaultsOf: defaultsOf, derive: derive, record: record, wqPlan: wqPlan, products: products,
+    budget: budget, totals: totals, evalQty: evalQty, priceOf: priceOf, fromTemplate: fromTemplate, fromTakeoff: fromTakeoff, fromDesignBudget: fromDesignBudget, gardenRows: gardenRows, takeoffCounts: takeoffCounts, pickLinked: pickLinked, inputsFromSummaries: inputsFromSummaries, SOURCES: SOURCES, readsOf: readsOf, sourceAt: sourceAt, sourceLabel: sourceLabel, sourceStamps: sourceStamps, staleSources: staleSources, logEntry: logEntry, summaryEntry: summaryEntry, mergeSummary: mergeSummary, defaultsOf: defaultsOf, derive: derive, record: record, wqPlan: wqPlan, products: products,
     pdf: { budgetPage: budgetPage, budgetPages: budgetPages, generate: generate, cards: cards, basis: drawBasis } };
   global.SonorEstimate = API;
   if (typeof module !== 'undefined' && module.exports) module.exports = API;
