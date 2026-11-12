@@ -1,4 +1,6 @@
 /* sonor-site.js — SHARED SITE SEAM (canonical master at workspace root, synced to every app's data/)
+ * v1.3.0 (2026-11-10) — SNAGS = Tasks snags + the project's Portal snags (v_tasks_unified source portal-snag, samples hidden), each with
+ *   source / priority / assignee / created_at and an `open` flag (one rule: SNAG_CLOSED); RFIs carry created_at + answer. v_site_project counts both.
  * v1.2.0 (2026-11-07) — Site is its own app (APP - Site, Bryn: "survey and site are diff apps … site is for engineers"): siteUrl → the Site
  *   app; devices carry loc (for SonorDeviceLinks), model and block_code — the engineers' level of detail.
  * v1.1.0 (2026-11-07) — WHO is the signed-in login: every RPC stamps by / created_by server side from the Cloudflare gateway's JWT
@@ -35,7 +37,8 @@
   if (typeof module !== 'undefined' && module.exports) module.exports = factory(); else root.SonorSite = factory();
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
-  var VERSION = '1.2.0';
+  var VERSION = '1.3.0';
+  var SNAG_CLOSED = /^(done|cancelled|closed|resolved|verified)$/i, RFI_CLOSED = /^(closed|answered|resolved|done)$/i;
   var FLOOR_FALLBACK = ['GF', '1F', '2F', '3F', '4F', 'BA', 'EXT'];
   var KINDS = [['note', 'Note'], ['change', 'Change from plan'], ['photo', 'Photo'], ['question', 'Question (RFI)'], ['snag', 'Snag']];
   var CHANGES = [['moved', 'Moved'], ['added', 'Added'], ['omitted', 'Left out'], ['route', 'Cable route changed'], ['swapped', 'Different product'], ['other', 'Other']];
@@ -53,14 +56,16 @@
       timed(supa.from('takeoffs_floors').select('id,floor_id,code,name,seq').eq('project_id', pid).is('deleted_at', null).order('seq'), ms),
       timed(supa.from('takeoffs_floor_plans').select('id,floor_id,revision_label,created_at').eq('project_id', pid).eq('is_active', true), ms),
       timed(supa.rpc('punch_project_devices', { p_project: pid }), ms),
-      timed(supa.from('tasks_general').select('id,title,status,labels,service_nn,external_source,metadata,plan_pin').eq('project_id', pid).or('external_source.eq.punch,labels.cs.{snag}'), ms),
+      timed(supa.from('tasks_general').select('id,title,status,priority,assignee,labels,service_nn,external_source,metadata,plan_pin,created_at,updated_at').eq('project_id', pid).or('external_source.eq.punch,labels.cs.{snag}'), ms),
       timed(supa.from('site_notes').select('*').eq('project_id', pid).order('created_at', { ascending: false }), ms),
       timed(supa.from('tasks_punch_stages').select('key,label,short,seq').order('seq'), ms),
       timed(supa.from('projects').select('metadata->plan_notes').eq('id', pid).maybeSingle(), ms),
-      timed(supa.from('v_site_project').select('*').eq('project_id', pid).maybeSingle(), ms)
+      timed(supa.from('v_site_project').select('*').eq('project_id', pid).maybeSingle(), ms),
+      timed(supa.from('v_tasks_unified').select('id,source_id,title,status,priority,assignee,service_nn,plan_pin,metadata,created_at,updated_at').eq('project_id', pid).eq('source_app', 'portal-snag'), ms).catch(function () { return { data: [] }; })
     ]);
     var floorsRaw = chk(q[0], 'floors') || [], plans = chk(q[1], 'plans') || [], devs = chk(q[2], 'devices') || [], tasks = chk(q[3], 'tasks') || [];
     var notes = chk(q[4], 'notes') || [], stages = chk(q[5], 'stages') || [], pnRow = chk(q[6], 'plan_notes'), summary = chk(q[7], 'summary') || null;
+    var portal = ((q[8] && q[8].data) || []).filter(function (r) { return !(r.metadata && (r.metadata.is_sample === true || r.metadata.is_sample === 'true')); });
 
     var planBy = {}; plans.forEach(function (p) { planBy[p.floor_id] = { id: p.id, revision_label: p.revision_label }; });
     var floors = sortFloors(floorsRaw.map(function (f) { return { id: f.id, floor_id: f.floor_id, code: f.code, name: f.name, plan: planBy[f.floor_id] || planBy[f.id] || null }; }));
@@ -94,15 +99,32 @@
     // checks whose device has no live row any more (removed from design, kept ticked) still show — never silently dropped
     Object.keys(byDev).forEach(function (k) { if (seen[k]) return; var c = byDev[k]; devices.push({ key: k, uid: uidByDev[k] || null, name: k, floor: null, floor_id: null, room: null, room_name: null, nn: null, kind: null, source: 'punch-only', checks: c, total: c.length, done: c.filter(function (x) { return x.done; }).length, notes: notesByKey[k] || [] }); });
 
+    fillPlaces(devices);
     var snags = tasks.filter(function (t) { return (t.labels || []).indexOf('snag') >= 0; }).map(function (t) {
-      return { id: t.id, title: t.title, status: t.status, service_nn: t.service_nn, floor: (t.plan_pin && t.plan_pin.floor_code) || null, note_id: (t.metadata && t.metadata.site_note && t.metadata.site_note.id) || null };
-    });
+      return { id: t.id, source: 'tasks', title: String(t.title || '').replace(/^Snag · /, ''), status: t.status, open: !SNAG_CLOSED.test(t.status || ''), priority: t.priority || null, assignee: t.assignee || null,
+        service_nn: t.service_nn, floor: (t.plan_pin && t.plan_pin.floor_code) || null, created_at: t.created_at, updated_at: t.updated_at, note_id: (t.metadata && t.metadata.site_note && t.metadata.site_note.id) || null };
+    }).concat(portal.map(function (r) {
+      return { id: r.source_id || r.id, source: 'portal', title: r.title, status: r.status, open: !SNAG_CLOSED.test(r.status || ''), priority: r.priority || null, assignee: r.assignee || null,
+        service_nn: r.service_nn, floor: (r.plan_pin && r.plan_pin.floor_code) || null, created_at: r.created_at, updated_at: r.updated_at, note_id: null };
+    })).sort(function (a, b) { return (b.open - a.open) || String(a.priority || 'p9').localeCompare(String(b.priority || 'p9')) || String(b.created_at || '').localeCompare(String(a.created_at || '')); });
     var rfis = []; var pn = pnRow && (pnRow.plan_notes || pnRow);
-    if (pn && pn.sections) Object.keys(pn.sections).forEach(function (s) { (Array.isArray(pn.sections[s]) ? pn.sections[s] : []).forEach(function (i) { if (i && i.is_rfi) rfis.push({ id: i.id, rfi_id: i.rfi_id, text: i.text, status: i.status || 'open', floor: i.floor || null, to: i.to || null }); }); });
+    if (pn && pn.sections) Object.keys(pn.sections).forEach(function (s) { (Array.isArray(pn.sections[s]) ? pn.sections[s] : []).forEach(function (i) { if (i && i.is_rfi) rfis.push({ id: i.id, rfi_id: i.rfi_id, text: i.text, status: i.status || 'open', open: !RFI_CLOSED.test(i.status || 'open'), floor: i.floor || null, to: i.to || null, created_at: i.created_at || null, answer: i.answer || i.response || null }); }); });
 
     return { v: VERSION, project_id: pid, at: new Date().toISOString(), stale: false, floors: floors, stages: stages, devices: devices, notes: notes, snags: snags, rfis: rfis, summary: summary };
   }
 
+  // v1.3.0 — a check whose device is no longer a live design row (punch-only) still says WHERE it is when its key carries the room code
+  // (LS-1F-MBED-01, MBED-2, KIT-1 …): the code is matched against the rooms the live devices already name. Never guesses beyond that.
+  function fillPlaces(devices) {
+    var rooms = {}; devices.forEach(function (d) { if (d.room && d.floor && !rooms[d.room]) rooms[d.room] = { floor: d.floor, name: d.room_name || d.room }; });
+    devices.forEach(function (d) {
+      if (d.floor && d.room_name) return;
+      var parts = String(d.key || '').toUpperCase().split(/[-_ ]/), fl = null, rm = null;
+      parts.forEach(function (t) { if (!fl && FLOOR_FALLBACK.indexOf(t) >= 0) fl = t; if (!rm && rooms[t]) rm = t; });
+      if (rm) { d.room = d.room || rm; d.room_name = d.room_name || rooms[rm].name; d.floor = d.floor || fl || rooms[rm].floor; } else if (fl && !d.floor) d.floor = fl;
+    });
+    return devices;
+  }
   async function load(supa, pid, opts) {
     opts = opts || {}; var key = 'site:' + pid, cache = opts.cache;
     try {
@@ -162,5 +184,5 @@
     } catch (e) { host.innerHTML = '<h2>Site</h2><p class="note">Could not load: ' + esc(e && e.message) + '</p>'; }
   }
 
-  return { VERSION: VERSION, KINDS: KINDS, CHANGES: CHANGES, load: load, renderCard: renderCard, cardHtml: cardHtml, siteUrl: siteUrl, byFloor: byFloor, stageProgress: stageProgress, tick: tick, saveNote: saveNote, resolve: resolve, uuid: uuid };
+  return { VERSION: VERSION, KINDS: KINDS, CHANGES: CHANGES, load: load, fillPlaces: fillPlaces, renderCard: renderCard, cardHtml: cardHtml, siteUrl: siteUrl, byFloor: byFloor, stageProgress: stageProgress, tick: tick, saveNote: saveNote, resolve: resolve, uuid: uuid };
 }));

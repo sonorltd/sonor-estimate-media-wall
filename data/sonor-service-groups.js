@@ -23,15 +23,16 @@
    ═══════════════════════════════════════════════════════════════════════ */
 (function (global) {
   'use strict';
-  var VERSION = '1.0.0';
+  var VERSION = '1.1.0';   // 1.1.0 (2026-11-10): the app-extra services 11 Electrical / 12 Construction (Takeoffs' extras, same colours) get their names and colours instead of 'Other'
+  var EXTRA = { '11': { nn: '11', client: 'Electrical', brand: 'Electrical', core: '11 Electrical', badge: 'Electrical', hex: '#e63946' }, '12': { nn: '12', client: 'Construction', brand: 'Construction', core: '12 Construction', badge: 'Construction', hex: '#8d6e4b' } };
   function services() { var B = global.__SONOR_BRAND__ || global.SonorBrand || {}; return B.services || []; }
   function nnOf(v) {
     if (v == null || v === '') return null;
     var m = String(v).match(/\d{1,2}/); if (!m) return null;
     var n = parseInt(m[0], 10); return n >= 1 && n <= 99 ? (n < 10 ? '0' : '') + n : null;
   }
-  function rank(nn) { var L = services(); for (var i = 0; i < L.length; i++) if (L[i].nn === nn) return i; return nn ? 900 + Number(nn) : 9999; }
-  function svc(nn) { var L = services(); for (var i = 0; i < L.length; i++) if (L[i].nn === nn) return L[i]; return null; }
+  function rank(nn) { var L = services(); for (var i = 0; i < L.length; i++) if (L[i].nn === nn) return i; return EXTRA[nn] ? 100 + Number(nn) : nn ? 900 + Number(nn) : 9999; }
+  function svc(nn) { var L = services(); for (var i = 0; i < L.length; i++) if (L[i].nn === nn) return L[i]; return EXTRA[nn] || null; }
   function getter(g) { return typeof g === 'function' ? g : function (it) { return it && (it.service_nn != null ? it.service_nn : it.nn != null ? it.nn : it.service); }; }
   function sort(items, getNn) {
     var g = getter(getNn);
